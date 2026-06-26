@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KCATA · Live Load</title>
+<title>KC Streetcar · Live Load</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -61,7 +61,7 @@
 
   /* ---- vehicle rows ---- */
   .vehicles{display:flex; flex-direction:column; gap:2px;}
-  .veh{display:grid; grid-template-columns:64px 1fr auto; align-items:center;
+  .veh{display:grid; grid-template-columns:60px minmax(0,1fr) 248px; align-items:center;
     gap:16px; padding:13px 14px; background:var(--panel); border:1px solid transparent;
     border-radius:7px;}
   .veh:hover{border-color:var(--line); background:var(--panel-2)}
@@ -74,10 +74,10 @@
   .band-low{background:var(--band-low)} .band-mid{background:var(--band-mid)}
   .band-high{background:var(--band-high)}
   .veh-count{font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:18px;
-    min-width:30px; text-align:right;}
+    width:42px; text-align:right; flex:none;}
   .veh-right{text-align:right; min-width:0;}
   .veh-loc{font-size:14px; color:var(--ink); white-space:nowrap; overflow:hidden;
-    text-overflow:ellipsis; max-width:230px; display:block;}
+    text-overflow:ellipsis; max-width:100%; display:block;}
   .veh-time{font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--faint);}
 
   /* ---- activity ticker ---- */
@@ -107,7 +107,9 @@
     .grid{grid-template-columns:1fr; gap:30px}
     .stats{gap:28px} .stat-num{font-size:46px}
     .stat-note{display:none}
-    .veh-loc{max-width:150px}
+    .veh{grid-template-columns:52px minmax(0,1fr); row-gap:9px}
+    .veh-right{grid-column:1 / -1; text-align:left}
+    .veh-loc{max-width:100%}
   }
   @media (prefers-reduced-motion:reduce){
     .livedot,.tick.fresh{animation:none}
@@ -118,7 +120,7 @@
 <body>
 <div class="wrap">
   <header class="topbar">
-    <div class="brand"><span class="livedot"></span>KCATA<span class="sub">Live Load</span></div>
+    <div class="brand"><span class="livedot"></span>KC Streetcar<span class="sub">Live Load</span></div>
     <div class="status">
       <span id="updated">connecting…</span>
       <span class="ago" id="ago"></span>
