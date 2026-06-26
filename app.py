@@ -35,8 +35,15 @@ FEED_MAX = 120            # recent events retained for the activity ticker
 CAPACITY = 40            # nominal seated capacity, used only for the crowding bar
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-stops = core.StopIndex(os.environ.get("STOPS_FILE"))
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Resolve a relative STOPS_FILE against this file's directory so it's found no
+# matter what working directory the host runs us from.
+_stops_env = os.environ.get("STOPS_FILE")
+_stops_path = None
+if _stops_env:
+    _stops_path = _stops_env if os.path.isabs(_stops_env) else os.path.join(HERE, _stops_env)
+stops = core.StopIndex(_stops_path)
 
 
 def describe_location(lat, lon) -> dict:
