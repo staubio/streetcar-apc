@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KCATA · Live Load</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0e131a; --bg-deep:#0a0e14; --panel:#151c26; --panel-2:#1a212c;
+    --line:#27313f; --ink:#e9eef5; --muted:#8b99aa; --faint:#5b6a7d;
+    --amber:#ffb02e; --on:#57d9a3; --off:#ff7d6b;
+    --band-low:#3fb27f; --band-mid:#ffb02e; --band-high:#ff6151;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:"Barlow",system-ui,sans-serif; line-height:1.4;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:0 20px 64px}
+
+  /* ---- top bar ---- */
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:16px; padding:20px 0 18px; border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex; align-items:baseline; gap:12px;
+    font-family:"Barlow Condensed",sans-serif; font-weight:700;
+    letter-spacing:.04em; font-size:26px; text-transform:uppercase;}
+  .brand .sub{color:var(--amber); font-weight:600; letter-spacing:.18em; font-size:18px;}
+  .livedot{width:9px; height:9px; border-radius:50%; background:var(--amber);
+    box-shadow:0 0 0 0 rgba(255,176,46,.6); align-self:center;
+    animation:pulse 2.4s ease-out infinite;}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,176,46,.55)}
+    70%{box-shadow:0 0 0 9px rgba(255,176,46,0)}100%{box-shadow:0 0 0 0 rgba(255,176,46,0)}}
+  .status{font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--muted);
+    text-align:right; display:flex; flex-direction:column; gap:2px;}
+  .status .ago{color:var(--faint)}
+
+  /* ---- stats strip ---- */
+  .stats{display:flex; align-items:flex-end; gap:40px; padding:22px 0 26px;
+    border-bottom:1px solid var(--line);}
+  .stat-num{font-family:"Barlow Condensed",sans-serif; font-weight:700;
+    font-size:58px; line-height:.9; letter-spacing:.01em;}
+  .stat-num.amber{color:var(--amber)}
+  .stat-label{color:var(--muted); font-size:13px; letter-spacing:.06em;
+    text-transform:uppercase; margin-top:8px;}
+  .stat-note{margin-left:auto; align-self:center; font-family:"IBM Plex Mono",monospace;
+    font-size:11.5px; color:var(--faint); border:1px solid var(--line);
+    padding:5px 10px; border-radius:4px;}
+
+  /* ---- columns ---- */
+  .grid{display:grid; grid-template-columns:1.05fr .95fr; gap:28px; margin-top:28px;}
+  .col-head{font-family:"Barlow Condensed",sans-serif; font-weight:600;
+    letter-spacing:.16em; text-transform:uppercase; font-size:14px;
+    color:var(--muted); margin:0 0 14px;}
+
+  /* ---- vehicle rows ---- */
+  .vehicles{display:flex; flex-direction:column; gap:2px;}
+  .veh{display:grid; grid-template-columns:64px 1fr auto; align-items:center;
+    gap:16px; padding:13px 14px; background:var(--panel); border:1px solid transparent;
+    border-radius:7px;}
+  .veh:hover{border-color:var(--line); background:var(--panel-2)}
+  .veh-id{font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:25px;
+    letter-spacing:.02em;}
+  .veh-mid{display:flex; align-items:center; gap:12px; min-width:0;}
+  .loadbar{flex:1; height:8px; border-radius:5px; background:#0c1118;
+    overflow:hidden; box-shadow:inset 0 0 0 1px var(--line);}
+  .loadfill{display:block; height:100%; border-radius:5px; transition:width .5s ease;}
+  .band-low{background:var(--band-low)} .band-mid{background:var(--band-mid)}
+  .band-high{background:var(--band-high)}
+  .veh-count{font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:18px;
+    min-width:30px; text-align:right;}
+  .veh-right{text-align:right; min-width:0;}
+  .veh-loc{font-size:14px; color:var(--ink); white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis; max-width:230px; display:block;}
+  .veh-time{font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--faint);}
+
+  /* ---- activity ticker ---- */
+  .feed{display:flex; flex-direction:column; gap:1px; font-family:"IBM Plex Mono",monospace;
+    background:var(--bg-deep); border:1px solid var(--line); border-radius:8px;
+    padding:6px; max-height:560px; overflow-y:auto;}
+  .tick{display:grid; grid-template-columns:74px 46px 88px 1fr; align-items:baseline;
+    gap:10px; padding:8px 10px; font-size:13px; border-radius:5px;}
+  .tick:hover{background:#111722}
+  .tick-time{color:var(--faint); font-size:12px;}
+  .tick-veh{color:var(--amber); font-weight:600;}
+  .tick-delta .on{color:var(--on); font-weight:600;}
+  .tick-delta .off{color:var(--off); font-weight:600; margin-left:6px;}
+  .tick-loc{color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .tick.fresh{animation:slidein .45s ease;}
+  @keyframes slidein{from{opacity:0; transform:translateY(-6px);
+    background:rgba(255,176,46,.10)} to{opacity:1; transform:none}}
+
+  .empty{color:var(--faint); font-size:14px; padding:26px 14px; text-align:center;
+    font-family:"Barlow",sans-serif;}
+  .errbar{margin-top:18px; padding:10px 14px; border-radius:6px; font-size:13px;
+    background:rgba(255,125,107,.10); border:1px solid rgba(255,125,107,.4);
+    color:#ffb3a8; font-family:"IBM Plex Mono",monospace;}
+  [hidden]{display:none !important}
+
+  @media (max-width:780px){
+    .grid{grid-template-columns:1fr; gap:30px}
+    .stats{gap:28px} .stat-num{font-size:46px}
+    .stat-note{display:none}
+    .veh-loc{max-width:150px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .livedot,.tick.fresh{animation:none}
+    .loadfill{transition:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="topbar">
+    <div class="brand"><span class="livedot"></span>KCATA<span class="sub">Live Load</span></div>
+    <div class="status">
+      <span id="updated">connecting…</span>
+      <span class="ago" id="ago"></span>
+    </div>
+  </header>
+
+  <section class="stats">
+    <div>
+      <div class="stat-num amber" id="onboard">—</div>
+      <div class="stat-label">passengers onboard</div>
+    </div>
+    <div>
+      <div class="stat-num" id="active">—</div>
+      <div class="stat-label">active vehicles</div>
+    </div>
+    <div class="stat-note" id="stopsnote">coordinates only</div>
+  </section>
+
+  <main class="grid">
+    <section>
+      <h2 class="col-head">Active vehicles</h2>
+      <div class="vehicles" id="vehicles">
+        <div class="empty">Waiting for active vehicles…</div>
+      </div>
+    </section>
+    <section>
+      <h2 class="col-head">Activity</h2>
+      <div class="feed" id="feed">
+        <div class="empty">New boardings and alightings will appear here.</div>
+      </div>
+    </section>
+  </main>
+
+  <div class="errbar" id="errbar" hidden></div>
+</div>
+
+<script>
+const POLL_MS = 4000;
+let capacity = 40;
+let lastUpdated = null;
+const seenFeed = new Set();   // feed ids already rendered (so only new rows animate)
+let firstFeedRender = true;
+
+const $ = (id) => document.getElementById(id);
+
+function hhmmss(ts){ return ts ? String(ts).slice(11,19) : ""; }
+
+function band(pct){ return pct < 0.5 ? "band-low" : pct < 0.9 ? "band-mid" : "band-high"; }
+
+function locText(o){
+  if(o.stop) return o.stop;
+  if(o.lat != null && o.lon != null) return o.lat.toFixed(4) + ", " + o.lon.toFixed(4);
+  return "location unknown";
+}
+
+function renderVehicles(list){
+  const el = $("vehicles");
+  if(!list.length){ el.innerHTML = '<div class="empty">No active vehicles right now.</div>'; return; }
+  el.innerHTML = list.map(v => {
+    const pct = Math.max(0, Math.min(1, v.count / capacity));
+    return `<div class="veh">
+      <div class="veh-id">${v.vehicle}</div>
+      <div class="veh-mid">
+        <div class="loadbar"><span class="loadfill ${band(pct)}" style="width:${(pct*100).toFixed(0)}%"></span></div>
+        <div class="veh-count">${v.count}</div>
+      </div>
+      <div class="veh-right">
+        <span class="veh-loc">${locText(v)}</span>
+        <span class="veh-time">${hhmmss(v.last_time)}</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderFeed(feed){
+  const el = $("feed");
+  if(!feed.length){
+    el.innerHTML = '<div class="empty">New boardings and alightings will appear here.</div>';
+    return;
+  }
+  el.innerHTML = feed.map(e => {
+    const fresh = !firstFeedRender && !seenFeed.has(e.id) ? " fresh" : "";
+    seenFeed.add(e.id);
+    return `<div class="tick${fresh}">
+      <span class="tick-time">${hhmmss(e.time)}</span>
+      <span class="tick-veh">${e.vehicle}</span>
+      <span class="tick-delta"><span class="on">+${e.ons}</span><span class="off">\u2212${e.offs}</span></span>
+      <span class="tick-loc">${locText(e)}</span>
+    </div>`;
+  }).join("");
+  firstFeedRender = false;
+}
+
+function agoText(){
+  if(!lastUpdated) return "";
+  const secs = Math.round((Date.now() - lastUpdated)/1000);
+  if(secs < 5) return "just now";
+  return secs < 60 ? secs + "s ago" : Math.floor(secs/60) + "m ago";
+}
+
+async function tick(){
+  try{
+    const r = await fetch("/api/state", {cache:"no-store"});
+    if(!r.ok) throw new Error("feed returned " + r.status);
+    const s = await r.json();
+    capacity = s.capacity || capacity;
+    $("onboard").textContent = s.total_onboard;
+    $("active").textContent = s.active_count;
+    $("updated").textContent = s.updated_at ? "updated " + hhmmss(s.updated_at) : "no data yet";
+    lastUpdated = Date.now();
+    $("ago").textContent = "";
+    $("stopsnote").textContent = s.stops_loaded ? "stop names on" : "coordinates only";
+    renderVehicles(s.vehicles);
+    renderFeed(s.feed);
+
+    const eb = $("errbar");
+    if(s.error){ eb.textContent = "Data feed error: " + s.error + " — retrying."; eb.hidden = false; }
+    else eb.hidden = true;
+  }catch(err){
+    const eb = $("errbar");
+    eb.textContent = "Can't reach the data feed — retrying.";
+    eb.hidden = false;
+  }
+}
+
+setInterval(() => { $("ago").textContent = agoText(); }, 1000);
+tick();
+setInterval(tick, POLL_MS);
+</script>
+</body>
+</html>
