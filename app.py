@@ -20,6 +20,7 @@ import os
 import threading
 import time
 from contextlib import asynccontextmanager
+from collections import Counter
 from datetime import datetime, timedelta
 
 import requests
@@ -77,14 +78,27 @@ def is_terminal(lat, lon) -> bool:
                for tlat, tlon in TERMINALS)
 
 
-def describe_location(lat, lon) -> dict:
-    """Resolve coordinates to a stop name when possible; always keep raw coords."""
-    hit = stops.nearest(lat, lon)
-    return {
-        "stop_id": hit[0] if hit else None,
-        "stop": hit[1] if hit else None,
-        "lat": lat, "lon": lon,
-    }
+def resolve_cluster_location(cluster: list[dict]) -> dict:
+    """Stop for a visit by majority vote across its events, so one drifted GPS fix
+    that falls outside the match radius doesn't blank the name. Coordinates shown
+    are the last event's (where the car is now)."""
+    hits = [h for e in cluster if (h := stops.nearest(e["lat"], e["lon"]))]
+    last = cluster[-1]
+    if hits:
+        (sid, name), _ = Counter(hits).most_common(1)[0]
+        return {"stop_id": sid, "stop": name, "lat": last["lat"], "lon": last["lon"]}
+    return {"stop_id": None, "stop": None, "lat": last["lat"], "lon": last["lon"]}
+
+
+def resolve_recent_location(evs: list[dict]) -> dict:
+    """Current location for a vehicle: the most recent of its last few fixes that
+    resolves to a stop, so a single bad last fix doesn't drop it to raw coords."""
+    for e in reversed(evs[-6:]):
+        hit = stops.nearest(e["lat"], e["lon"])
+        if hit:
+            return {"stop_id": hit[0], "stop": hit[1], "lat": e["lat"], "lon": e["lon"]}
+    last = evs[-1]
+    return {"stop_id": None, "stop": None, "lat": last["lat"], "lon": last["lon"]}
 
 
 class LiveState:
@@ -122,7 +136,7 @@ def _make_visit(vehicle: str, cluster: list[dict]) -> dict:
         "ons": sum(e["ons"] for e in cluster),
         "offs": sum(e["offs"] for e in cluster),
         "doors": len(cluster),
-        **describe_location(last["lat"], last["lon"]),
+        **resolve_cluster_location(cluster),
     }
 
 
@@ -179,7 +193,7 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
         if last["_t"] >= active_cutoff:                  # reported recently -> active
             vehicles.append({
                 "vehicle": v, "count": count, "last_time": last["time"],
-                **describe_location(last["lat"], last["lon"]),
+                **resolve_recent_location(evs),
             })
     vehicles.sort(key=lambda x: (-x["count"], x["vehicle"]))   # busiest first
 
