@@ -40,6 +40,13 @@ CAPACITY = 150           # nominal capacity for the crowding bar (KC Streetcar ~
 AGG_TOLERANCE_S = 60
 FEED_WINDOW_MIN = 120     # only cluster events from this recent a window for the feed
 
+# Stops where every passenger must exit (turnbacks). Occupancy is re-anchored to
+# zero here, correcting accumulated APC drift once per round trip. Matched by
+# case-insensitive substring against GTFS stop_name. The southern terminus is the
+# end of every run; add the northern terminus too for tighter drift control.
+TERMINAL_STOP_NAMES = ["UMKC", "Riverfront"]
+TERMINAL_RADIUS_M = 80.0
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -50,6 +57,21 @@ _stops_path = None
 if _stops_env:
     _stops_path = _stops_env if os.path.isabs(_stops_env) else os.path.join(HERE, _stops_env)
 stops = core.StopIndex(_stops_path)
+
+# Resolve the configured terminal stop name(s) to coordinates once at startup, so
+# per-event checks are a couple of cheap distance comparisons rather than a full
+# nearest-stop scan.
+TERMINALS = [(lat, lon) for sid, name, lat, lon in stops.stops
+             if any(t.lower() in name.lower() for t in TERMINAL_STOP_NAMES)]
+if stops.stops:
+    logging.info("terminal stops matched: %d (%s)", len(TERMINALS), TERMINAL_STOP_NAMES)
+
+
+def is_terminal(lat, lon) -> bool:
+    if lat is None or lon is None or not TERMINALS:
+        return False
+    return any(core.StopIndex._haversine_m(lat, lon, tlat, tlon) <= TERMINAL_RADIUS_M
+               for tlat, tlon in TERMINALS)
 
 
 def describe_location(lat, lon) -> dict:
@@ -134,6 +156,8 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
 
     vehicles: list[dict] = []
     for v, evs in by_vehicle.items():
+        for e in evs:                                    # flag turnbacks for the walk
+            e["terminal"] = is_terminal(e["lat"], e["lon"])
         count = core.occupancy_since_last_gap(evs, gap_s, core.FLOOR_AT_ZERO)
         last = evs[-1]
         if last["_t"] >= active_cutoff:                  # reported recently -> active
