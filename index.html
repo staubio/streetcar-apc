@@ -218,7 +218,7 @@ function renderFeed(feed){
       <span class="tick-time">${hhmmss(e.time)}</span>
       <span class="tick-veh">${e.vehicle}</span>
       <span class="tick-delta"><span class="on">+${e.ons}</span><span class="off">\u2212${e.offs}</span></span>
-      <span class="tick-loc">${locText(e)}</span>
+      <span class="tick-loc">${dirChip(e.direction)}${locText(e)}</span>
     </div>`;
   }).join("");
   firstFeedRender = false;
