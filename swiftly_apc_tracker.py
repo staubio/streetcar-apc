@@ -133,33 +133,38 @@ def parse_event_time(s: str) -> datetime | None:
 
 
 def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
-                             floor: bool = True) -> int:
+                             floor: bool = True,
+                             terminal_rearrive_s: float = 900) -> int:
     """Sum ons - offs over a vehicle's events, resetting to 0 on each quiet gap
     and at terminal stops where every passenger must exit.
 
     `events` must be deduped on `id` and sorted by (time, id). An event with a
-    truthy `terminal` key marks a turnback where the vehicle empties: on arrival
-    the count is zeroed (known empty), and during the terminal dwell only the
-    boardings (return-trip riders) are counted -- the mass deboarding offs are
-    ignored because the reset already accounts for them. This re-anchors the
-    count to ground truth once per round trip, correcting accumulated APC drift.
+    truthy `terminal` key marks a turnback where the vehicle empties. The reset
+    fires once per arrival: a terminal event re-zeros the count only if the car
+    has not been at a terminal within the last `terminal_rearrive_s` seconds, so a
+    multi-minute dwell (riders trickling on) or a one-off GPS-jittered event does
+    not wipe the boardings already collected, while a genuine revisit a round trip
+    later does reset. During the dwell only boardings are counted; the mass
+    deboarding offs are ignored because the reset already accounts for them. The
+    running total is floored at zero at every step, so a mass deboarding can never
+    drive it negative and mask the boardings that follow.
     """
     running = 0
     last_t: datetime | None = None
-    prev_terminal = False
+    last_terminal_t: datetime | None = None
     for e in events:
         t = e["_t"]
         if last_t is not None and (t - last_t).total_seconds() > gap_reset_s:
             running = 0          # long quiet gap -> depot / out of service -> reset
-            prev_terminal = False
+            last_terminal_t = None
         if e.get("terminal"):
-            if not prev_terminal:
-                running = 0      # arrival at turnback: everyone must exit -> empty
+            if last_terminal_t is None or \
+                    (t - last_terminal_t).total_seconds() > terminal_rearrive_s:
+                running = 0      # fresh arrival at turnback: everyone exits -> empty
             running += e["ons"]  # count return-trip boardings; ignore deboarding offs
-            prev_terminal = True
+            last_terminal_t = t
         else:
             running += e["ons"] - e["offs"]
-            prev_terminal = False
         if floor and running < 0:
             running = 0          # occupancy can't be negative; clamping here keeps a
                                  # mass deboarding (e.g. an unconfigured turnback) from

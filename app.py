@@ -33,11 +33,14 @@ ACTIVE_WINDOW_MIN = 30     # a vehicle is "active" if it reported within this ma
 FEED_MAX = 120            # stop-visits retained for the activity ticker
 CAPACITY = 150           # nominal capacity for the crowding bar (KC Streetcar ~150)
 
-# Per-door reporting: one stop visit emits several records (one per door) a few
-# seconds apart. Cluster a vehicle's events within this many seconds into one
-# visit and sum ons/offs across doors. Keep it well below the travel time between
-# stops (minutes) so distinct stops never merge.
-AGG_TOLERANCE_S = 60
+# Per-door reporting: one stop visit emits several records (one per door), and a
+# car can idle 5-10 min at a terminus while riders trickle on. So cluster by
+# LOCATION, not time: events within CLUSTER_RADIUS_M are the same visit no matter
+# how spread out, and a new visit starts only when the car moves to a different
+# stop. The radius stays well under stop spacing (~150m+) so adjacent stops never
+# merge; DWELL_MAX_GAP_S still breaks a same-location revisit a round trip later.
+CLUSTER_RADIUS_M = 80.0
+DWELL_MAX_GAP_S = 900     # a gap longer than this starts a new visit (same-stop revisit)
 FEED_WINDOW_MIN = 120     # only cluster events from this recent a window for the feed
 
 # Stops where every passenger must exit (turnbacks). Occupancy is re-anchored to
@@ -123,12 +126,21 @@ def _make_visit(vehicle: str, cluster: list[dict]) -> dict:
     }
 
 
-def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
-    """Cluster recent per-door events into stop visits, newest first.
+def _move_m(a: dict, b: dict):
+    """Distance in meters between two events, or None if either lacks coordinates."""
+    if None in (a["lat"], a["lon"], b["lat"], b["lon"]):
+        return None
+    return core.StopIndex._haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
 
-    Events for one vehicle are already time-sorted; a gap larger than the
-    tolerance starts a new visit. Distinct stops are minutes apart, so they never
-    merge; the several door records of one stop (seconds apart) collapse into one.
+
+def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
+    """Cluster recent events into stop visits by location, newest first.
+
+    Events for one vehicle are time-sorted. They stay in one visit while they're
+    within CLUSTER_RADIUS_M of where the visit started -- so the several door
+    records of one stop AND a long terminus dwell with riders trickling on all
+    collapse into a single visit. A new visit starts when the car moves to a
+    different stop, or after DWELL_MAX_GAP_S (a revisit to the same stop later).
     """
     visits: list[dict] = []
     for v, evs in by_vehicle.items():
@@ -136,9 +148,13 @@ def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
         for e in evs:
             if e["_t"] < since:                       # feed shows only recent activity
                 continue
-            if cluster and (e["_t"] - cluster[-1]["_t"]).total_seconds() > AGG_TOLERANCE_S:
-                visits.append(_make_visit(v, cluster))
-                cluster = []
+            if cluster:
+                d = _move_m(cluster[0], e)
+                moved = d is not None and d > CLUSTER_RADIUS_M
+                stale = (e["_t"] - cluster[-1]["_t"]).total_seconds() > DWELL_MAX_GAP_S
+                if moved or stale:
+                    visits.append(_make_visit(v, cluster))
+                    cluster = []
             cluster.append(e)
         if cluster:
             visits.append(_make_visit(v, cluster))
