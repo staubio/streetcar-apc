@@ -40,7 +40,7 @@ CAPACITY = 150           # nominal capacity for the crowding bar (KC Streetcar ~
 # how spread out, and a new visit starts only when the car moves to a different
 # stop. The radius stays well under stop spacing (~150m+) so adjacent stops never
 # merge; DWELL_MAX_GAP_S still breaks a same-location revisit a round trip later.
-CLUSTER_RADIUS_M = 80.0
+CLUSTER_RADIUS_M = float(os.environ.get("CLUSTER_RADIUS_M", "100"))
 DWELL_MAX_GAP_S = 900     # a gap longer than this starts a new visit (same-stop revisit)
 FEED_WINDOW_MIN = 120     # only cluster events from this recent a window for the feed
 
@@ -231,12 +231,16 @@ def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
                 moved = d is not None and d > CLUSTER_RADIUS_M
                 stale = (e["_t"] - cluster[-1]["_t"]).total_seconds() > DWELL_MAX_GAP_S
                 if moved or stale:
-                    visits.append(_make_visit(v, cluster, infer_direction(evs[:end_idx + 1])))
+                    visit = _make_visit(v, cluster, infer_direction(evs[:end_idx + 1]))
+                    if visit["ons"] or visit["offs"]:     # hide no-activity heartbeats
+                        visits.append(visit)
                     cluster = []
             cluster.append(e)
             end_idx = idx
         if cluster:
-            visits.append(_make_visit(v, cluster, infer_direction(evs[:end_idx + 1])))
+            visit = _make_visit(v, cluster, infer_direction(evs[:end_idx + 1]))
+            if visit["ons"] or visit["offs"]:
+                visits.append(visit)
     visits.sort(key=lambda x: (x["time"], x["id"]), reverse=True)
     return visits[:FEED_MAX]
 
