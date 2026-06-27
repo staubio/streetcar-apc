@@ -49,7 +49,18 @@ FEED_WINDOW_MIN = 120     # only cluster events from this recent a window for th
 # case-insensitive substring against GTFS stop_name. The southern terminus is the
 # end of every run; add the northern terminus too for tighter drift control.
 TERMINAL_STOP_NAMES = ["UMKC", "Riverfront"]
-TERMINAL_RADIUS_M = 80.0
+TERMINAL_RADIUS_M = float(os.environ.get("TERMINAL_RADIUS_M", "80"))
+
+# Stops whose direction is fixed by route geometry. At the one-way couplet on the
+# north downtown loop the latitude trend can't tell direction, but these stops are
+# only ever served one way. Matched by case-insensitive substring of the resolved
+# stop name; this overrides inference. (City Market is belt-and-suspenders -- it's
+# late enough in the run that movement usually has it right already.)
+STOP_DIRECTION = {
+    "River Market": "Southbound",
+    "Delaware": "Southbound",
+    "City Market": "Northbound",
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +71,8 @@ _stops_env = os.environ.get("STOPS_FILE")
 _stops_path = None
 if _stops_env:
     _stops_path = _stops_env if os.path.isabs(_stops_env) else os.path.join(HERE, _stops_env)
-stops = core.StopIndex(_stops_path)
+stops = core.StopIndex(_stops_path,
+                       max_meters=float(os.environ.get("STOP_MATCH_RADIUS_M", "120")))
 
 # Resolve the configured terminal stop name(s) to coordinates once at startup, so
 # per-event checks are a couple of cheap distance comparisons rather than a full
@@ -84,25 +96,46 @@ SOUTH_TERMINAL = min(TERMINALS, key=lambda c: c[0]) if TERMINALS else None
 DIR_MOVE_DEG = 0.0005          # ~55m of latitude change = real movement, not jitter
 
 
-def infer_direction(evs: list[dict]) -> str | None:
-    """Northbound / Southbound for a vehicle.
+def direction_override(stop_name) -> str | None:
+    """Fixed direction for couplet stops that geometry can't disambiguate."""
+    if not stop_name:
+        return None
+    for frag, d in STOP_DIRECTION.items():
+        if frag.lower() in stop_name.lower():
+            return d
+    return None
 
-    Primary: a streetcar only reverses at a terminus, so it's heading away from
-    the terminal it last touched (south terminus -> Northbound, north -> Southbound).
-    Fallback (no terminal seen yet): the sign of recent latitude change.
+
+def infer_direction(evs: list[dict]) -> str | None:
+    """Northbound / Southbound for a vehicle, as of its latest event.
+
+    Primary signal is actual movement: the sign of the most recent meaningful
+    north-south change in position. This is correct regardless of whether a
+    turnback was detected, so a southbound car still reads Southbound even if the
+    north terminus wasn't matched. Only when the car has been essentially
+    stationary (a dwell) do we fall back to a *recent* terminal to show the
+    direction it's about to depart in; a stale terminal from a prior round trip
+    is ignored so it can't mislabel the current leg.
     """
-    if NORTH_TERMINAL and SOUTH_TERMINAL and NORTH_TERMINAL != SOUTH_TERMINAL:
+    pts = [e for e in evs if e["lat"] is not None]
+    if pts:
+        last = pts[-1]
+        for e in reversed(pts[:-1]):
+            if (last["_t"] - e["_t"]).total_seconds() > 900:
+                break                      # gone back 15 min without real movement
+            dlat = last["lat"] - e["lat"]
+            if abs(dlat) > DIR_MOVE_DEG:
+                return "Northbound" if dlat > 0 else "Southbound"
+
+    if pts and NORTH_TERMINAL and SOUTH_TERMINAL and NORTH_TERMINAL != SOUTH_TERMINAL:
+        last_t = pts[-1]["_t"]
         for e in reversed(evs):
             if e.get("terminal") and e["lat"] is not None:
+                if (last_t - e["_t"]).total_seconds() > 1800:
+                    break                  # stale terminal -> don't trust it
                 dn = core.StopIndex._haversine_m(e["lat"], e["lon"], *NORTH_TERMINAL)
                 ds = core.StopIndex._haversine_m(e["lat"], e["lon"], *SOUTH_TERMINAL)
                 return "Southbound" if dn <= ds else "Northbound"
-
-    pts = [e for e in evs[-15:] if e["lat"] is not None]
-    if len(pts) >= 2:
-        dlat = pts[-1]["lat"] - pts[0]["lat"]
-        if abs(dlat) > DIR_MOVE_DEG:
-            return "Northbound" if dlat > 0 else "Southbound"
     return None
 
 
@@ -154,17 +187,19 @@ class LiveState:
 state = LiveState()
 
 
-def _make_visit(vehicle: str, cluster: list[dict]) -> dict:
+def _make_visit(vehicle: str, cluster: list[dict], direction: str | None) -> dict:
     """Collapse a vehicle's clustered per-door records into one stop visit."""
     last = cluster[-1]
+    loc = resolve_cluster_location(cluster)
     return {
         "id": min(e["id"] for e in cluster),          # stable across late-joining doors
         "vehicle": vehicle,
         "time": last["time"],
+        "direction": direction_override(loc["stop"]) or direction,
         "ons": sum(e["ons"] for e in cluster),
         "offs": sum(e["offs"] for e in cluster),
         "doors": len(cluster),
-        **resolve_cluster_location(cluster),
+        **loc,
     }
 
 
@@ -187,7 +222,8 @@ def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
     visits: list[dict] = []
     for v, evs in by_vehicle.items():
         cluster: list[dict] = []
-        for e in evs:
+        end_idx = -1
+        for idx, e in enumerate(evs):
             if e["_t"] < since:                       # feed shows only recent activity
                 continue
             if cluster:
@@ -195,11 +231,12 @@ def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
                 moved = d is not None and d > CLUSTER_RADIUS_M
                 stale = (e["_t"] - cluster[-1]["_t"]).total_seconds() > DWELL_MAX_GAP_S
                 if moved or stale:
-                    visits.append(_make_visit(v, cluster))
+                    visits.append(_make_visit(v, cluster, infer_direction(evs[:end_idx + 1])))
                     cluster = []
             cluster.append(e)
+            end_idx = idx
         if cluster:
-            visits.append(_make_visit(v, cluster))
+            visits.append(_make_visit(v, cluster, infer_direction(evs[:end_idx + 1])))
     visits.sort(key=lambda x: (x["time"], x["id"]), reverse=True)
     return visits[:FEED_MAX]
 
@@ -219,10 +256,11 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
         count = core.occupancy_since_last_gap(evs, gap_s, core.FLOOR_AT_ZERO)
         last = evs[-1]
         if last["_t"] >= active_cutoff:                  # reported recently -> active
+            loc = resolve_recent_location(evs)
             vehicles.append({
                 "vehicle": v, "count": count, "last_time": last["time"],
-                "direction": infer_direction(evs),
-                **resolve_recent_location(evs),
+                "direction": direction_override(loc["stop"]) or infer_direction(evs),
+                **loc,
             })
     vehicles.sort(key=lambda x: (-x["count"], x["vehicle"]))   # busiest first
 
