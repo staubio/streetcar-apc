@@ -78,6 +78,34 @@ def is_terminal(lat, lon) -> bool:
                for tlat, tlon in TERMINALS)
 
 
+# Northern / southern terminus by latitude, for direction inference.
+NORTH_TERMINAL = max(TERMINALS, key=lambda c: c[0]) if TERMINALS else None
+SOUTH_TERMINAL = min(TERMINALS, key=lambda c: c[0]) if TERMINALS else None
+DIR_MOVE_DEG = 0.0005          # ~55m of latitude change = real movement, not jitter
+
+
+def infer_direction(evs: list[dict]) -> str | None:
+    """Northbound / Southbound for a vehicle.
+
+    Primary: a streetcar only reverses at a terminus, so it's heading away from
+    the terminal it last touched (south terminus -> Northbound, north -> Southbound).
+    Fallback (no terminal seen yet): the sign of recent latitude change.
+    """
+    if NORTH_TERMINAL and SOUTH_TERMINAL and NORTH_TERMINAL != SOUTH_TERMINAL:
+        for e in reversed(evs):
+            if e.get("terminal") and e["lat"] is not None:
+                dn = core.StopIndex._haversine_m(e["lat"], e["lon"], *NORTH_TERMINAL)
+                ds = core.StopIndex._haversine_m(e["lat"], e["lon"], *SOUTH_TERMINAL)
+                return "Southbound" if dn <= ds else "Northbound"
+
+    pts = [e for e in evs[-15:] if e["lat"] is not None]
+    if len(pts) >= 2:
+        dlat = pts[-1]["lat"] - pts[0]["lat"]
+        if abs(dlat) > DIR_MOVE_DEG:
+            return "Northbound" if dlat > 0 else "Southbound"
+    return None
+
+
 def resolve_cluster_location(cluster: list[dict]) -> dict:
     """Stop for a visit by majority vote across its events, so one drifted GPS fix
     that falls outside the match radius doesn't blank the name. Coordinates shown
@@ -193,6 +221,7 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
         if last["_t"] >= active_cutoff:                  # reported recently -> active
             vehicles.append({
                 "vehicle": v, "count": count, "last_time": last["time"],
+                "direction": infer_direction(evs),
                 **resolve_recent_location(evs),
             })
     vehicles.sort(key=lambda x: (-x["count"], x["vehicle"]))   # busiest first
