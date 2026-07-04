@@ -136,6 +136,10 @@ Priority order:
   **bias** (mean offset vector → compass direction + magnitude), and **consistency**
   = |mean vector| / mean magnitude (near 1 = systematic → wrong stop coord or antenna;
   near 0 = random receiver noise), plus the largest individual offsets (outliers).
+- The page also shows a **settings panel** (stop-match / VMF / terminal radii, VMF
+  center, stops loaded) and a **"VMF Activity (Excluded from Tracker)"** table listing
+  the door-active fixes dropped by the VMF zone, sorted farthest-from-VMF first so the
+  team can watch the yard/River-Market boundary. VMF stays excluded everywhere else.
 
 ---
 

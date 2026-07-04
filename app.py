@@ -389,13 +389,16 @@ def compute_gps_diagnostics() -> dict:
     stop_ids: dict = {}
     dists: list = []
     outliers: list = []
+    vmf_hits: list = []
 
     for e in events:
         ons, offs = e.get("ons") or 0, e.get("offs") or 0
         if not (ons or offs):                    # only confirmed at-stop events
             continue
         lat, lon = e.get("latitude"), e.get("longitude")
-        if at_vmf(lat, lon):                      # non-revenue -> not a stop
+        if at_vmf(lat, lon):                      # non-revenue -> excluded, but recorded
+            vmf_hits.append((core.StopIndex._haversine_m(lat, lon, VMF_LAT, VMF_LON),
+                             e["vehicle_id"], e.get("time", ""), lat, lon, ons, offs))
             continue
         det = _drift_detail(lat, lon)
         if not det:
@@ -426,6 +429,13 @@ def compute_gps_diagnostics() -> dict:
         "match_radius_m": round(radius),
         "stops_loaded": bool(stops.stops),
         "sample_size": overall["n"],
+        "settings": {
+            "stop_match_radius_m": round(radius),
+            "vmf_radius_m": round(VMF_RADIUS_M),
+            "vmf_center": [round(VMF_LAT, 6), round(VMF_LON, 6)],
+            "terminal_radius_m": round(TERMINAL_RADIUS_M),
+            "stops_count": len(stops.stops),
+        },
         "overall": {**_finalize(overall),
                     "p50": pct(0.50), "p90": pct(0.90), "p95": pct(0.95)},
         "by_vehicle": sorted(
@@ -439,6 +449,11 @@ def compute_gps_diagnostics() -> dict:
             {"offset_m": round(d), "dir": bearing, "vehicle": v, "time": t,
              "nearest_stop": nm, "lat": lat, "lon": lon}
             for d, v, t, nm, lat, lon, bearing in outliers[:DRIFT_OUTLIER_COUNT]],
+        "vmf_excluded_count": len(vmf_hits),
+        "vmf_hits": [                              # farthest-from-VMF first (near the boundary)
+            {"dist_m": round(d), "vehicle": v, "time": t,
+             "ons": ons, "offs": offs, "lat": lat, "lon": lon}
+            for d, v, t, lat, lon, ons, offs in sorted(vmf_hits, reverse=True)[:30]],
     }
 
 

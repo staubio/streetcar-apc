@@ -44,6 +44,12 @@
     margin-top:7px;}
   .card.bias .v{color:var(--amber)}
 
+  .settings{display:flex; flex-wrap:wrap; gap:12px 30px; padding:14px 18px; margin:12px 0 4px;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;}
+  .settings .item{display:flex; flex-direction:column; gap:3px;}
+  .settings .sl{color:var(--faint); font-size:11px; letter-spacing:.05em; text-transform:uppercase;}
+  .settings .sv{font-family:"IBM Plex Mono",monospace; font-size:14px; color:var(--ink);}
+
   h2{font-family:"Barlow Condensed",sans-serif; font-weight:600; letter-spacing:.14em;
     text-transform:uppercase; font-size:14px; color:var(--muted); margin:34px 0 12px;}
 
@@ -62,6 +68,7 @@
   .m-good{color:var(--good)} .m-warn{color:var(--warn)} .m-bad{color:var(--bad)}
   .flag{font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--faint);}
   .sys{color:var(--amber)}
+  .on{color:var(--good)} .off{color:var(--bad)}
 
   .empty,.loading{color:var(--faint); padding:40px 12px; text-align:center; font-size:15px;}
   .errbar{margin-top:18px; padding:10px 14px; border-radius:6px; font-size:13px;
@@ -86,7 +93,9 @@
     definitely at a stop, so its distance to the nearest stop is the GPS error.
     <b>Consistency</b> near 1 means the offset points the same way every time
     (systematic — a wrong stop coordinate or a mis-set antenna); near 0 means random
-    scatter (a noisy receiver).
+    scatter (a noisy receiver). A fix beyond the stop-match radius counts as a
+    <b>match failure</b>; fixes inside the maintenance-yard zone are excluded from
+    these stats and listed separately under VMF Activity below.
   </p>
 
   <div id="errbar" class="errbar" hidden></div>
@@ -94,6 +103,7 @@
   <div id="report" hidden>
     <div class="cards" id="cards"></div>
     <div id="biasline" class="note"></div>
+    <div class="settings" id="settings"></div>
 
     <h2>By vehicle · worst first</h2>
     <table><thead><tr>
@@ -112,6 +122,12 @@
       <th class="l">Offset</th><th class="l">Vehicle</th><th class="l">Time</th>
       <th class="l">Nearest stop</th><th class="l">Reported at</th>
     </tr></thead><tbody id="out"></tbody></table>
+
+    <h2 id="vmfhead">VMF Activity (Excluded from Tracker)</h2>
+    <table><thead><tr>
+      <th class="l">Dist from VMF</th><th class="l">Vehicle</th><th class="l">Time</th>
+      <th class="l">Boarded / Alighted</th><th class="l">Reported at</th>
+    </tr></thead><tbody id="vmf"></tbody></table>
   </div>
 </div>
 
@@ -194,6 +210,29 @@ function render(d){
       <td class="l">${e.nearest_stop || "—"}</td>
       <td class="l">${e.lat != null ? e.lat.toFixed(5)+", "+e.lon.toFixed(5) : "—"}</td>
     </tr>`).join("");
+
+  const s = d.settings || {};
+  const coord = s.vmf_center ? s.vmf_center[0].toFixed(6)+", "+s.vmf_center[1].toFixed(6) : "—";
+  $("settings").innerHTML = [
+    ["Stop match radius", (s.stop_match_radius_m ?? "—") + " m"],
+    ["VMF exclusion radius", (s.vmf_radius_m ?? "—") + " m"],
+    ["VMF center", coord],
+    ["Terminal radius", (s.terminal_radius_m ?? "—") + " m"],
+    ["Stops loaded", s.stops_count ?? "—"],
+    ["Drift source", "boarding / alighting fixes"],
+  ].map(([l, v]) => `<div class="item"><span class="sl">${l}</span><span class="sv">${v}</span></div>`).join("");
+
+  $("vmfhead").textContent = "VMF Activity (Excluded from Tracker)" +
+    (d.vmf_excluded_count ? " · " + d.vmf_excluded_count + " events" : "");
+  $("vmf").innerHTML = (d.vmf_hits && d.vmf_hits.length)
+    ? d.vmf_hits.map(h => `
+        <tr>
+          <td class="l">${h.dist_m}m</td>
+          <td class="l id">${h.vehicle}</td><td class="l">${hhmmss(h.time)}</td>
+          <td class="l"><span class="on">+${h.ons}</span> / <span class="off">\u2212${h.offs}</span></td>
+          <td class="l">${h.lat != null ? h.lat.toFixed(5)+", "+h.lon.toFixed(5) : "—"}</td>
+        </tr>`).join("")
+    : '<tr><td class="l" colspan="5" style="color:var(--faint)">No maintenance-yard activity today.</td></tr>';
 
   $("loading").hidden = true; $("report").hidden = false;
 }
