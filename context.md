@@ -147,7 +147,7 @@ Priority order:
 - `STOP_MATCH_RADIUS_M` — stop-match radius, default **175**.
 - `TERMINAL_RADIUS_M` — terminus-detection radius, default **150**.
 - `CLUSTER_RADIUS_M` — feed clustering radius, default **100**.
-- `VMF_RADIUS_M` — maintenance-facility non-revenue zone radius, default **150**.
+- `VMF_RADIUS_M` — maintenance-facility non-revenue zone radius, default **230**.
 - `PORT` — set by Railway.
 
 **Constants in `app.py` / `swiftly_apc_tracker.py`**

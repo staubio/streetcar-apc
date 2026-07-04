@@ -53,10 +53,13 @@ TERMINAL_STOP_NAMES = ["UMKC", "Riverfront"]
 TERMINAL_RADIUS_M = float(os.environ.get("TERMINAL_RADIUS_M", "150"))
 
 # Vehicle Maintenance Facility: a non-revenue zone. Vehicles reporting from here
-# are out of service -- not shown, and their events don't count. 39 06'44.91" N,
-# 94 34'38.15" W in decimal. Keep the radius clear of the nearest revenue stop.
+# (including staging/yard moves that trigger door counts) are out of service --
+# not shown, and their events don't count. Point sampled at the facility doors:
+# 39 06'44.91" N, 94 34'38.15" W. Staging extends ~230m from that point; the
+# nearest revenue stop (River Market, 3rd & Grand) is ~380m away, so a 230m zone
+# covers the yard while staying 150m clear of that stop.
 VMF_LAT, VMF_LON = 39.112475, -94.577264
-VMF_RADIUS_M = float(os.environ.get("VMF_RADIUS_M", "150"))
+VMF_RADIUS_M = float(os.environ.get("VMF_RADIUS_M", "230"))
 
 # Stops whose direction is fixed by route geometry. Used only as reliable anchors:
 # one-way stops with no nearby opposite-direction twin. The latitude trend can't
