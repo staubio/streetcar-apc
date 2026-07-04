@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KC Streetcar · GPS Diagnostics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0e131a; --bg-deep:#0a0e14; --panel:#151c26; --panel-2:#1a212c;
+    --line:#27313f; --ink:#e9eef5; --muted:#8b99aa; --faint:#5b6a7d;
+    --amber:#ffb02e; --good:#3fb27f; --warn:#ffb02e; --bad:#ff6151;
+    --brand:#0082d6;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg); color:var(--ink); font-family:"Barlow",system-ui,sans-serif;
+    line-height:1.4; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1180px; margin:0 auto; padding:0 20px 64px}
+
+  .topbar{display:flex; align-items:center; justify-content:space-between; gap:16px;
+    padding:20px 0 18px; border-bottom:1px solid var(--line);}
+  .brand{display:flex; align-items:baseline; gap:12px; font-family:"Barlow Condensed",sans-serif;
+    font-weight:700; letter-spacing:.04em; font-size:26px; text-transform:uppercase;}
+  .brand .sub{color:var(--brand); font-weight:600; letter-spacing:.14em; font-size:17px;}
+  .controls{display:flex; align-items:center; gap:14px; font-family:"IBM Plex Mono",monospace;
+    font-size:12.5px; color:var(--muted);}
+  .controls a{color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--faint);}
+  .controls a:hover{color:var(--ink)}
+  button{font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--bg-deep);
+    background:var(--brand); border:0; border-radius:5px; padding:7px 14px; cursor:pointer;
+    font-weight:600;}
+  button:disabled{opacity:.5; cursor:default}
+
+  .note{color:var(--faint); font-size:13px; margin:16px 0 4px; max-width:820px;}
+
+  .cards{display:flex; flex-wrap:wrap; gap:14px; margin:22px 0 6px;}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    padding:14px 18px; min-width:120px;}
+  .card .v{font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:32px; line-height:1;}
+  .card .l{color:var(--muted); font-size:12px; letter-spacing:.05em; text-transform:uppercase;
+    margin-top:7px;}
+  .card.bias .v{color:var(--amber)}
+
+  h2{font-family:"Barlow Condensed",sans-serif; font-weight:600; letter-spacing:.14em;
+    text-transform:uppercase; font-size:14px; color:var(--muted); margin:34px 0 12px;}
+
+  table{width:100%; border-collapse:collapse; font-size:14px;}
+  th{text-align:right; font-family:"Barlow Condensed",sans-serif; font-weight:600;
+    letter-spacing:.06em; text-transform:uppercase; font-size:12px; color:var(--faint);
+    padding:8px 12px; border-bottom:1px solid var(--line); white-space:nowrap;}
+  th.l,td.l{text-align:left}
+  td{padding:9px 12px; border-bottom:1px solid #1b232e; font-family:"IBM Plex Mono",monospace;
+    text-align:right; white-space:nowrap;}
+  td.l{font-family:"Barlow",sans-serif}
+  tr:hover td{background:var(--panel)}
+  .id{color:var(--amber); font-weight:600}
+  .warnrow td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+  .badrow td:first-child{box-shadow:inset 3px 0 0 var(--bad)}
+  .m-good{color:var(--good)} .m-warn{color:var(--warn)} .m-bad{color:var(--bad)}
+  .flag{font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--faint);}
+  .sys{color:var(--amber)}
+
+  .empty,.loading{color:var(--faint); padding:40px 12px; text-align:center; font-size:15px;}
+  .errbar{margin-top:18px; padding:10px 14px; border-radius:6px; font-size:13px;
+    background:rgba(255,97,81,.10); border:1px solid rgba(255,97,81,.4); color:#ffb3a8;
+    font-family:"IBM Plex Mono",monospace;}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="topbar">
+    <div class="brand">KC Streetcar<span class="sub">GPS Diagnostics</span></div>
+    <div class="controls">
+      <a href="/">&larr; Live board</a>
+      <span id="stamp"></span>
+      <button id="run" onclick="run()">Refresh</button>
+    </div>
+  </header>
+
+  <p class="note">
+    Drift is measured from boarding/alighting events — a fix with door activity was
+    definitely at a stop, so its distance to the nearest stop is the GPS error.
+    <b>Consistency</b> near 1 means the offset points the same way every time
+    (systematic — a wrong stop coordinate or a mis-set antenna); near 0 means random
+    scatter (a noisy receiver).
+  </p>
+
+  <div id="errbar" class="errbar" hidden></div>
+  <div id="loading" class="loading">Running diagnostic over today's data…</div>
+  <div id="report" hidden>
+    <div class="cards" id="cards"></div>
+    <div id="biasline" class="note"></div>
+
+    <h2>By vehicle · worst first</h2>
+    <table><thead><tr>
+      <th class="l">Vehicle</th><th>Events</th><th>Mean drift</th><th>Max</th>
+      <th>Match&nbsp;fail</th><th>Bias</th><th>Consistency</th><th class="l">&nbsp;</th>
+    </tr></thead><tbody id="veh"></tbody></table>
+
+    <h2>By stop · worst first</h2>
+    <table><thead><tr>
+      <th class="l">Stop</th><th>Events</th><th>Mean drift</th><th>Max</th>
+      <th>Match&nbsp;fail</th><th>Bias</th><th>Consistency</th><th class="l">&nbsp;</th>
+    </tr></thead><tbody id="stop"></tbody></table>
+
+    <h2>Largest individual offsets</h2>
+    <table><thead><tr>
+      <th class="l">Offset</th><th class="l">Vehicle</th><th class="l">Time</th>
+      <th class="l">Nearest stop</th><th class="l">Reported at</th>
+    </tr></thead><tbody id="out"></tbody></table>
+  </div>
+</div>
+
+<script>
+let radius = 175;
+const $ = id => document.getElementById(id);
+
+function cls(mean){
+  if(mean > radius) return "m-bad";
+  if(mean > radius*0.7) return "m-warn";
+  return "m-good";
+}
+function rowcls(mean){
+  if(mean > radius) return "badrow";
+  if(mean > radius*0.7) return "warnrow";
+  return "";
+}
+function flag(mean, consistency){
+  if(mean <= radius*0.7) return "";
+  return consistency >= 0.7
+    ? '<span class="sys">systematic — check coord/antenna</span>'
+    : 'noisy receiver';
+}
+function hhmmss(t){ return t ? String(t).slice(11,19) : ""; }
+
+function card(v, l, extra=""){
+  return `<div class="card ${extra}"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+}
+
+function render(d){
+  radius = d.match_radius_m || radius;
+  $("stamp").textContent = "generated " + hhmmss(d.generated_at) + " · " + d.date;
+
+  if(!d.stops_loaded){
+    $("report").hidden = true;
+    $("loading").hidden = false;
+    $("loading").textContent = "No stops loaded — set STOPS_FILE to measure drift.";
+    return;
+  }
+  if(!d.sample_size){
+    $("loading").hidden = false; $("report").hidden = true;
+    $("loading").textContent = "No boarding/alighting events yet today.";
+    return;
+  }
+
+  const o = d.overall;
+  $("cards").innerHTML =
+    card(d.sample_size, "events measured") +
+    card(o.mean_offset_m + "m", "mean drift") +
+    card(o.p90 + "m", "90th pct") +
+    card(o.p95 + "m", "95th pct") +
+    card(o.fail_pct + "%", "beyond " + radius + "m") +
+    card(o.bias_dir + " " + o.bias_mag_m + "m", "system bias", "bias");
+  $("biasline").innerHTML = o.bias_mag_m >= 10
+    ? `System-wide, fixes land on average <b>${o.bias_mag_m}m to the ${o.bias_dir}</b> of the registered stop (consistency ${o.consistency}).`
+    : `No meaningful system-wide directional bias (consistency ${o.consistency}).`;
+
+  $("veh").innerHTML = d.by_vehicle.map(v => `
+    <tr class="${rowcls(v.mean_offset_m)}">
+      <td class="l id">${v.vehicle}</td><td>${v.n}</td>
+      <td class="${cls(v.mean_offset_m)}">${v.mean_offset_m}m</td>
+      <td>${v.max_offset_m}m</td><td>${v.fail_pct}%</td>
+      <td>${v.bias_dir} ${v.bias_mag_m}m</td><td>${v.consistency}</td>
+      <td class="l flag">${flag(v.mean_offset_m, v.consistency)}</td>
+    </tr>`).join("");
+
+  $("stop").innerHTML = d.by_stop.map(s => `
+    <tr class="${rowcls(s.mean_offset_m)}">
+      <td class="l">${s.stop}</td><td>${s.n}</td>
+      <td class="${cls(s.mean_offset_m)}">${s.mean_offset_m}m</td>
+      <td>${s.max_offset_m}m</td><td>${s.fail_pct}%</td>
+      <td>${s.bias_dir} ${s.bias_mag_m}m</td><td>${s.consistency}</td>
+      <td class="l flag">${flag(s.mean_offset_m, s.consistency)}</td>
+    </tr>`).join("");
+
+  $("out").innerHTML = d.outliers.map(e => `
+    <tr>
+      <td class="l ${cls(e.offset_m)}">${e.offset_m}m</td>
+      <td class="l id">${e.vehicle}</td><td class="l">${hhmmss(e.time)}</td>
+      <td class="l">${e.nearest_stop || "—"}</td>
+      <td class="l">${e.lat != null ? e.lat.toFixed(5)+", "+e.lon.toFixed(5) : "—"}</td>
+    </tr>`).join("");
+
+  $("loading").hidden = true; $("report").hidden = false;
+}
+
+async function run(){
+  $("run").disabled = true;
+  $("errbar").hidden = true;
+  $("loading").hidden = false; $("report").hidden = true;
+  $("loading").textContent = "Running diagnostic over today's data…";
+  try{
+    const r = await fetch("/api/gps-diagnostics", {cache:"no-store"});
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    render(d);
+  }catch(err){
+    $("loading").hidden = true;
+    $("errbar").textContent = "Diagnostic failed: " + err.message;
+    $("errbar").hidden = false;
+  }finally{
+    $("run").disabled = false;
+  }
+}
+run();
+</script>
+</body>
+</html>

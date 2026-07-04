@@ -27,6 +27,7 @@ re-deriving the design.
 | `swiftly_apc_tracker.py` | Core library: API fetch, occupancy walk, `StopIndex`. Importable; also runs standalone as a logger via `python swiftly_apc_tracker.py`. |
 | `app.py` | FastAPI service. Background poller, in-memory live state, `/api/state` JSON, serves `index.html`. **All app logic lives here.** |
 | `index.html` | Thin frontend. Polls `/api/state` every ~4s and renders. No business logic. |
+| `gps.html` | On-demand GPS-diagnostics page (served at `/gps`). Calls `/api/gps-diagnostics`. |
 | `requirements.txt` | `requests`, `fastapi`, `uvicorn[standard]`, `tzdata`. |
 | `railway.json` | Railway deploy config (Railpack builder, start command, single replica). |
 | `stops.txt` | GTFS stops. **Currently the full agency feed — includes bus stops.** |
@@ -124,6 +125,17 @@ Priority order:
 - A visit's stop is decided by **majority vote across the cluster**, so one
   drifted GPS fix can't blank the name.
 - An active vehicle's location falls back to its **most recent resolvable** fix.
+
+### GPS diagnostics (`compute_gps_diagnostics`, on-demand)
+- Served at `/gps` (page) + `/api/gps-diagnostics` (JSON). **Not** part of the poll
+  loop — computed fresh per request, so it can do a full-day scan cheaply.
+- Method: an event with a boarding or alighting (`ons>0 or offs>0`, excluding VMF)
+  was definitely at a stop, so its offset to the **nearest** stop (unbounded) is the
+  GPS drift. Aggregated by vehicle and by stop.
+- Metrics: mean/max/percentile drift, match-fail % (beyond the radius), directional
+  **bias** (mean offset vector → compass direction + magnitude), and **consistency**
+  = |mean vector| / mean magnitude (near 1 = systematic → wrong stop coord or antenna;
+  near 0 = random receiver noise), plus the largest individual offsets (outliers).
 
 ---
 

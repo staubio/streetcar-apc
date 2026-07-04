@@ -16,11 +16,12 @@ repopulates as new events arrive.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
 from contextlib import asynccontextmanager
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
 import requests
@@ -320,14 +321,145 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan, title="KCATA Live Load")
 
 
+# ---- GPS diagnostics (on-demand; not part of the poll loop) ------------------
+# An event with a boarding or alighting was definitely at a stop, so the offset
+# from where it reported to the nearest stop's coordinate is the GPS drift. We
+# measure that for every door-activity event in a day and aggregate.
+_diag_session = requests.Session()
+_diag_limiter = core.RateLimiter()
+DRIFT_OUTLIER_COUNT = 20
+_COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+
+def _compass(north_m: float, east_m: float) -> str:
+    if abs(north_m) < 1 and abs(east_m) < 1:
+        return "-"
+    ang = (math.degrees(math.atan2(east_m, north_m)) + 360) % 360   # 0=N, 90=E
+    return _COMPASS[int((ang + 22.5) // 45) % 8]
+
+
+def _drift_detail(lat, lon):
+    """Nearest stop (unbounded) and the offset to it, in meters.
+    Returns (stop_id, stop_name, distance_m, north_m, east_m) or None."""
+    if lat is None or lon is None or not stops.stops:
+        return None
+    best_d, best = float("inf"), None
+    for sid, name, slat, slon in stops.stops:
+        d = core.StopIndex._haversine_m(lat, lon, slat, slon)
+        if d < best_d:
+            best_d, best = d, (sid, name, slat, slon)
+    sid, name, slat, slon = best
+    north = (lat - slat) * 111320.0
+    east = (lon - slon) * 111320.0 * math.cos(math.radians(lat))
+    return sid, name, best_d, north, east
+
+
+def _finalize(a: dict) -> dict:
+    n = a["n"] or 1
+    mean = a["sum"] / n
+    bn, be = a["sn"] / n, a["se"] / n
+    bias_mag = math.hypot(bn, be)
+    return {
+        "n": a["n"],
+        "mean_offset_m": round(mean),
+        "max_offset_m": round(a["max"]),
+        "fail_pct": round(100 * a["fail"] / n, 1),
+        "bias_dir": _compass(bn, be),
+        "bias_mag_m": round(bias_mag),
+        # 0 = random scatter (noisy receiver); ~1 = same direction every time
+        # (systematic -> wrong stop coordinate or antenna offset)
+        "consistency": round(bias_mag / mean, 2) if mean > 0 else 0.0,
+    }
+
+
+def compute_gps_diagnostics() -> dict:
+    now = datetime.now(core.AGENCY_TZ)
+    today = now.date()
+    events = core.fetch_day(_diag_session, _diag_limiter, today)
+    radius = stops.max_meters
+
+    def acc():
+        return {"n": 0, "sum": 0.0, "max": 0.0, "sn": 0.0, "se": 0.0, "fail": 0}
+    overall = acc()
+    veh: dict = defaultdict(acc)
+    stp: dict = defaultdict(acc)
+    stop_ids: dict = {}
+    dists: list = []
+    outliers: list = []
+
+    for e in events:
+        ons, offs = e.get("ons") or 0, e.get("offs") or 0
+        if not (ons or offs):                    # only confirmed at-stop events
+            continue
+        lat, lon = e.get("latitude"), e.get("longitude")
+        if at_vmf(lat, lon):                      # non-revenue -> not a stop
+            continue
+        det = _drift_detail(lat, lon)
+        if not det:
+            continue
+        sid, name, d, north, east = det
+        fail = 1 if d > radius else 0
+        for a in (overall, veh[e["vehicle_id"]], stp[name]):
+            a["n"] += 1
+            a["sum"] += d
+            a["max"] = max(a["max"], d)
+            a["sn"] += north
+            a["se"] += east
+            a["fail"] += fail
+        stop_ids[name] = sid
+        dists.append(d)
+        outliers.append((d, e["vehicle_id"], e.get("time", ""), name, lat, lon))
+
+    dists.sort()
+
+    def pct(p):
+        return round(dists[min(len(dists) - 1, int(p * len(dists)))]) if dists else 0
+
+    outliers.sort(reverse=True)
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "date": today.isoformat(),
+        "match_radius_m": round(radius),
+        "stops_loaded": bool(stops.stops),
+        "sample_size": overall["n"],
+        "overall": {**_finalize(overall),
+                    "p50": pct(0.50), "p90": pct(0.90), "p95": pct(0.95)},
+        "by_vehicle": sorted(
+            ({"vehicle": v, **_finalize(a)} for v, a in veh.items()),
+            key=lambda x: -x["mean_offset_m"]),
+        "by_stop": sorted(
+            ({"stop": s, "stop_id": stop_ids.get(s), **_finalize(a)}
+             for s, a in stp.items()),
+            key=lambda x: -x["mean_offset_m"]),
+        "outliers": [
+            {"offset_m": round(d), "vehicle": v, "time": t, "nearest_stop": nm,
+             "lat": lat, "lon": lon}
+            for d, v, t, nm, lat, lon in outliers[:DRIFT_OUTLIER_COUNT]],
+    }
+
+
 @app.get("/api/state")
 def api_state():
     return JSONResponse(state.snapshot())
 
 
+@app.get("/api/gps-diagnostics")
+def api_gps_diagnostics():
+    try:
+        return JSONResponse(compute_gps_diagnostics())
+    except Exception as exc:
+        logging.exception("gps diagnostics failed")
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 @app.get("/")
 def index():
     return FileResponse(os.path.join(HERE, "index.html"))
+
+
+@app.get("/gps")
+def gps_page():
+    return FileResponse(os.path.join(HERE, "gps.html"))
 
 
 if __name__ == "__main__":
