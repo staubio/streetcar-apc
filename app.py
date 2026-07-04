@@ -408,7 +408,8 @@ def compute_gps_diagnostics() -> dict:
             a["fail"] += fail
         stop_ids[name] = sid
         dists.append(d)
-        outliers.append((d, e["vehicle_id"], e.get("time", ""), name, lat, lon))
+        outliers.append((d, e["vehicle_id"], e.get("time", ""), name, lat, lon,
+                         _compass(north, east)))
 
     dists.sort()
 
@@ -432,9 +433,9 @@ def compute_gps_diagnostics() -> dict:
              for s, a in stp.items()),
             key=lambda x: -x["mean_offset_m"]),
         "outliers": [
-            {"offset_m": round(d), "vehicle": v, "time": t, "nearest_stop": nm,
-             "lat": lat, "lon": lon}
-            for d, v, t, nm, lat, lon in outliers[:DRIFT_OUTLIER_COUNT]],
+            {"offset_m": round(d), "dir": bearing, "vehicle": v, "time": t,
+             "nearest_stop": nm, "lat": lat, "lon": lon}
+            for d, v, t, nm, lat, lon, bearing in outliers[:DRIFT_OUTLIER_COUNT]],
     }
 
 

@@ -189,7 +189,7 @@ function render(d){
 
   $("out").innerHTML = d.outliers.map(e => `
     <tr>
-      <td class="l ${cls(e.offset_m)}">${e.offset_m}m</td>
+      <td class="l ${cls(e.offset_m)}">${e.offset_m}m${e.dir && e.dir !== "-" ? " " + e.dir : ""}</td>
       <td class="l id">${e.vehicle}</td><td class="l">${hhmmss(e.time)}</td>
       <td class="l">${e.nearest_stop || "—"}</td>
       <td class="l">${e.lat != null ? e.lat.toFixed(5)+", "+e.lon.toFixed(5) : "—"}</td>
