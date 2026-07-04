@@ -157,6 +157,11 @@ def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
         if last_t is not None and (t - last_t).total_seconds() > gap_reset_s:
             running = 0          # long quiet gap -> depot / out of service -> reset
             last_terminal_t = None
+        if e.get("nonrevenue"):
+            running = 0          # at the maintenance facility -> out of service, empty
+            last_terminal_t = None
+            last_t = t
+            continue             # non-revenue: ignore its ons/offs entirely
         if e.get("terminal"):
             if last_terminal_t is None or \
                     (t - last_terminal_t).total_seconds() > terminal_rearrive_s:

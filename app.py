@@ -49,16 +49,25 @@ FEED_WINDOW_MIN = 120     # only cluster events from this recent a window for th
 # case-insensitive substring against GTFS stop_name. The southern terminus is the
 # end of every run; add the northern terminus too for tighter drift control.
 TERMINAL_STOP_NAMES = ["UMKC", "Riverfront"]
-TERMINAL_RADIUS_M = float(os.environ.get("TERMINAL_RADIUS_M", "80"))
+TERMINAL_RADIUS_M = float(os.environ.get("TERMINAL_RADIUS_M", "150"))
 
-# Stops whose direction is fixed by route geometry. At the one-way couplet on the
-# north downtown loop the latitude trend can't tell direction, but these stops are
-# only ever served one way. Matched by case-insensitive substring of the resolved
-# stop name; this overrides inference. (City Market is belt-and-suspenders -- it's
-# late enough in the run that movement usually has it right already.)
+# Vehicle Maintenance Facility: a non-revenue zone. Vehicles reporting from here
+# are out of service -- not shown, and their events don't count. 39 06'44.91" N,
+# 94 34'38.15" W in decimal. Keep the radius clear of the nearest revenue stop.
+VMF_LAT, VMF_LON = 39.112475, -94.577264
+VMF_RADIUS_M = float(os.environ.get("VMF_RADIUS_M", "150"))
+
+# Stops whose direction is fixed by route geometry. Used only as reliable anchors:
+# one-way stops with no nearby opposite-direction twin. The latitude trend can't
+# tell direction on the north couplet, so we lean on these. River Market (3rd &
+# Grand) is deliberately NOT here -- its NB and SB records sit close together, so a
+# northbound car can match the SB record and get flipped wrongly. Delaware is
+# SB-only with no twin, so it's the trustworthy SB anchor; Riverfront is the north
+# terminus, from which a car only ever departs south. Matched by case-insensitive
+# substring of the resolved stop name; overrides inference.
 STOP_DIRECTION = {
-    "River Market": "Southbound",
     "Delaware": "Southbound",
+    "Riverfront": "Southbound",
     "City Market": "Northbound",
 }
 
@@ -72,7 +81,7 @@ _stops_path = None
 if _stops_env:
     _stops_path = _stops_env if os.path.isabs(_stops_env) else os.path.join(HERE, _stops_env)
 stops = core.StopIndex(_stops_path,
-                       max_meters=float(os.environ.get("STOP_MATCH_RADIUS_M", "120")))
+                       max_meters=float(os.environ.get("STOP_MATCH_RADIUS_M", "175")))
 
 # Resolve the configured terminal stop name(s) to coordinates once at startup, so
 # per-event checks are a couple of cheap distance comparisons rather than a full
@@ -88,6 +97,13 @@ def is_terminal(lat, lon) -> bool:
         return False
     return any(core.StopIndex._haversine_m(lat, lon, tlat, tlon) <= TERMINAL_RADIUS_M
                for tlat, tlon in TERMINALS)
+
+
+def at_vmf(lat, lon) -> bool:
+    """True if a fix is inside the maintenance-facility (non-revenue) zone."""
+    if lat is None or lon is None:
+        return False
+    return core.StopIndex._haversine_m(lat, lon, VMF_LAT, VMF_LON) <= VMF_RADIUS_M
 
 
 # Northern / southern terminus by latitude, for direction inference.
@@ -226,6 +242,8 @@ def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
         for idx, e in enumerate(evs):
             if e["_t"] < since:                       # feed shows only recent activity
                 continue
+            if e.get("nonrevenue"):                   # VMF / out of service -> not a visit
+                continue
             if cluster:
                 d = _move_m(cluster[0], e)
                 moved = d is not None and d > CLUSTER_RADIUS_M
@@ -255,10 +273,13 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
 
     vehicles: list[dict] = []
     for v, evs in by_vehicle.items():
-        for e in evs:                                    # flag turnbacks for the walk
+        for e in evs:                                    # flag turnbacks + non-revenue
             e["terminal"] = is_terminal(e["lat"], e["lon"])
+            e["nonrevenue"] = at_vmf(e["lat"], e["lon"])
         count = core.occupancy_since_last_gap(evs, gap_s, core.FLOOR_AT_ZERO)
         last = evs[-1]
+        if last.get("nonrevenue"):                       # sitting at the VMF -> out of service
+            continue
         if last["_t"] >= active_cutoff:                  # reported recently -> active
             loc = resolve_recent_location(evs)
             vehicles.append({

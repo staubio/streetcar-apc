@@ -132,9 +132,10 @@ Priority order:
 **Environment variables**
 - `SWIFTLY_API_KEY` — required.
 - `STOPS_FILE` — path to GTFS stops (relative resolves against app dir).
-- `STOP_MATCH_RADIUS_M` — stop-match radius, default **120**.
-- `TERMINAL_RADIUS_M` — terminus-detection radius, default **80**.
+- `STOP_MATCH_RADIUS_M` — stop-match radius, default **175**.
+- `TERMINAL_RADIUS_M` — terminus-detection radius, default **150**.
 - `CLUSTER_RADIUS_M` — feed clustering radius, default **100**.
+- `VMF_RADIUS_M` — maintenance-facility non-revenue zone radius, default **150**.
 - `PORT` — set by Railway.
 
 **Constants in `app.py` / `swiftly_apc_tracker.py`**
@@ -143,7 +144,11 @@ Priority order:
 - `GAP_RESET_HOURS = 3`, `LOOKBACK_HOURS = 22`, `POLL_INTERVAL_S = 30`.
 - `ACTIVE_WINDOW_MIN = 30`, `FEED_WINDOW_MIN = 120`, `FEED_MAX = 120`.
 - `TERMINAL_STOP_NAMES = ["UMKC", "Riverfront"]` (substring match on stop_name).
-- `STOP_DIRECTION = {"River Market": "Southbound", "Delaware": "Southbound", "City Market": "Northbound"}`.
+- `STOP_DIRECTION = {"Delaware": "Southbound", "Riverfront": "Southbound", "City Market": "Northbound"}` — reliable one-way anchors only (River Market's NB/SB couplet is excluded because a car can match the wrong side).
+- `VMF_LAT, VMF_LON = 39.112475, -94.577264` — Vehicle Maintenance Facility. A
+  non-revenue zone: a vehicle whose latest fix is within `VMF_RADIUS_M` is treated
+  as out of service (excluded from the vehicle list and feed), and VMF events reset
+  occupancy and are ignored (so a car pulling out starts fresh at 0).
 
 ---
 
