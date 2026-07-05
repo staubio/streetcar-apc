@@ -66,12 +66,13 @@ VMF_RADIUS_M = float(os.environ.get("VMF_RADIUS_M", "230"))
 # tell direction on the north couplet, so we lean on these. River Market (3rd &
 # Grand) is deliberately NOT here -- its NB and SB records sit close together, so a
 # northbound car can match the SB record and get flipped wrongly. Delaware is
-# SB-only with no twin, so it's the trustworthy SB anchor; Riverfront is the north
-# terminus, from which a car only ever departs south. Matched by case-insensitive
-# substring of the resolved stop name; overrides inference.
+# SB-only with no twin, so it's the trustworthy SB anchor; the termini are one-way
+# by definition -- a car only ever departs Riverfront southbound and UMKC northbound.
+# Matched by case-insensitive substring of the resolved stop name; overrides inference.
 STOP_DIRECTION = {
     "Delaware": "Southbound",
     "Riverfront": "Southbound",
+    "UMKC": "Northbound",
     "City Market": "Northbound",
 }
 
