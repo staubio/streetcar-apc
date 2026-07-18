@@ -1,6 +1,7 @@
 requests>=2.31,<3
 fastapi>=0.110
 uvicorn[standard]>=0.29
+psycopg2-binary>=2.9
 # tzdata is only needed on minimal systems (slim Docker images, some Linux installs)
 # where the OS time-zone database isn't present, so ZoneInfo("America/Chicago") resolves.
 tzdata>=2024.1

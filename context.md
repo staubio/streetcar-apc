@@ -28,6 +28,8 @@ re-deriving the design.
 | `app.py` | FastAPI service. Background poller, in-memory live state, `/api/state` JSON, serves `index.html`. **All app logic lives here.** |
 | `index.html` | Thin frontend. Polls `/api/state` every ~4s and renders. No business logic. |
 | `gps.html` | On-demand GPS-diagnostics page (served at `/gps`). Calls `/api/gps-diagnostics`. |
+| `db.py` | Postgres persistence (Phase 1: raw event capture). No-op unless `DATABASE_URL` is set. |
+| `schema.sql` | Reference DDL. Phase 1 (`apc_events`) is auto-created by `db.init_schema()`; Phase 2 rollups are commented. |
 | `requirements.txt` | `requests`, `fastapi`, `uvicorn[standard]`, `tzdata`. |
 | `railway.json` | Railway deploy config (Railpack builder, start command, single replica). |
 | `stops.txt` | GTFS stops. **Currently the full agency feed — includes bus stops.** |
@@ -126,7 +128,19 @@ Priority order:
   drifted GPS fix can't blank the name.
 - An active vehicle's location falls back to its **most recent resolvable** fix.
 
-### GPS diagnostics (`compute_gps_diagnostics`, on-demand)
+### Persistence (`db.py`, Phase 1 — raw capture)
+- **Fully optional**: no-op unless `DATABASE_URL` is set, so the app is unchanged
+  without a database. DB failures never crash the tracker; capture retries next poll.
+- Each poll, `capture_events` inserts new raw events (id above an in-memory
+  high-water mark) into `apc_events` via `execute_values` + `ON CONFLICT (id) DO
+  NOTHING`. High-water advances only on a successful write. On startup the mark is
+  seeded from `MAX(id)` in the table.
+- `apc_events` is the immutable source of truth (see schema.sql). Every future
+  metric is derived from it and rebuildable, so logic changes never rewrite history.
+- Known gaps to close in Phase 2: (a) the high-water race can rarely skip an
+  out-of-order-committed id — a periodic full-day reconcile fixes it; (b) events
+  missed during long downtime older than the fetch lookback need an explicit
+  backfill (fetch specific past dates); (c) build the rollup tables and report APIs.
 - Served at `/gps` (page) + `/api/gps-diagnostics` (JSON). **Not** part of the poll
   loop — computed fresh per request, so it can do a full-day scan cheaply.
 - Method: an event with a boarding or alighting (`ons>0 or offs>0`, excluding VMF)
@@ -152,6 +166,8 @@ Priority order:
 - `TERMINAL_RADIUS_M` — terminus-detection radius, default **150**.
 - `CLUSTER_RADIUS_M` — feed clustering radius, default **100**.
 - `VMF_RADIUS_M` — maintenance-facility non-revenue zone radius, default **230**.
+- `DATABASE_URL` — Postgres connection string. If unset, persistence is fully
+  disabled and the app runs as before. Set by Railway when a Postgres service is linked.
 - `PORT` — set by Railway.
 
 **Constants in `app.py` / `swiftly_apc_tracker.py`**
