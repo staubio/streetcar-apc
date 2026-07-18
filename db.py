@@ -48,16 +48,27 @@ CREATE TABLE IF NOT EXISTS apc_events (
 CREATE INDEX IF NOT EXISTS apc_events_service_date_idx ON apc_events (service_date);
 CREATE INDEX IF NOT EXISTS apc_events_vehicle_time_idx ON apc_events (vehicle_id, event_time);
 
--- Layer 2: per-stop, per-hour rollup. Derived from apc_events + the app's stop
--- resolution; rebuildable at any time. Drives every stop/ridership report.
+-- Layer 2: per-stop, per-hour, PER-DIRECTION rollup. Derived from apc_events + the
+-- app's stop resolution and direction inference; rebuildable at any time.
+-- One-time migration: stop_hourly is a derived cache, so if an older version exists
+-- without the direction column we just drop it and let the backfill rebuild it.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'stop_hourly')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'stop_hourly' AND column_name = 'direction') THEN
+        DROP TABLE stop_hourly;
+    END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS stop_hourly (
     bucket_start TIMESTAMPTZ NOT NULL,          -- start of the hour, agency-local instant
     service_date DATE        NOT NULL,          -- agency-local date, for daily grouping
     stop_name    TEXT        NOT NULL,          -- '(unmatched)' if activity didn't resolve
+    direction    TEXT        NOT NULL,          -- 'Northbound' | 'Southbound' | 'Unknown'
     ons          INTEGER     NOT NULL,
     offs         INTEGER     NOT NULL,
     events       INTEGER     NOT NULL,          -- door-active event count in the bucket
-    PRIMARY KEY (bucket_start, stop_name)
+    PRIMARY KEY (bucket_start, stop_name, direction)
 );
 CREATE INDEX IF NOT EXISTS stop_hourly_date_idx ON stop_hourly (service_date);
 CREATE INDEX IF NOT EXISTS stop_hourly_stop_idx ON stop_hourly (stop_name);
@@ -153,7 +164,7 @@ def fetch_raw_day(service_date):
             conn = _get_conn()
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT vehicle_id, event_time, latitude, longitude, ons, offs "
+                    "SELECT id, vehicle_id, event_time, latitude, longitude, ons, offs "
                     "FROM apc_events WHERE service_date = %s", (service_date,))
                 return cur.fetchall()
         except Exception:
@@ -162,9 +173,28 @@ def fetch_raw_day(service_date):
             return []
 
 
+def rollup_missing_dates():
+    """Service dates present in raw but not yet in the rollup (for startup rebuild)."""
+    if not enabled:
+        return []
+    with _lock:
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT service_date FROM apc_events "
+                    "WHERE service_date NOT IN (SELECT DISTINCT service_date FROM stop_hourly) "
+                    "ORDER BY service_date")
+                return [r[0] for r in cur.fetchall()]
+        except Exception:
+            logging.exception("db: rollup_missing_dates failed")
+            _reset()
+            return []
+
+
 def replace_stop_hourly(service_date, rows) -> bool:
     """Idempotently replace one service date's rollup: delete then insert, in one txn.
-    rows: (bucket_start, service_date, stop_name, ons, offs, events)."""
+    rows: (bucket_start, service_date, stop_name, direction, ons, offs, events)."""
     if not enabled:
         return False
     with _lock:
@@ -176,7 +206,8 @@ def replace_stop_hourly(service_date, rows) -> bool:
                     execute_values(
                         cur,
                         "INSERT INTO stop_hourly "
-                        "(bucket_start, service_date, stop_name, ons, offs, events) VALUES %s",
+                        "(bucket_start, service_date, stop_name, direction, ons, offs, events) "
+                        "VALUES %s",
                         list(rows), page_size=1000)
             conn.commit()
             return True

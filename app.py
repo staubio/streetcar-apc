@@ -337,33 +337,45 @@ def capture_events(by_vehicle: dict[str, list[dict]]) -> None:
 
 
 # ---- Rollups (derived from raw; rebuildable) ---------------------------------
-ROLLUP_INTERVAL_S = 300          # refresh today's rollup at most this often
-ROLLUP_BACKFILL_DAYS = 3         # on startup, (re)build rollups for the last N days
+ROLLUP_INTERVAL_S = 300          # refresh recent days' rollup at most this often
 UNMATCHED = "(unmatched)"        # bucket for door activity that didn't resolve to a stop
 _last_rollup = 0.0
 
 
 def build_stop_hourly(service_date) -> int:
-    """Rebuild one service date's stop_hourly rollup from raw. Pure function of the
-    raw events + the current stop-resolution logic, so it self-heals and can be
-    re-run any time the matching logic changes. Returns rows written."""
+    """Rebuild one service date's stop_hourly rollup from raw, tagging each event with
+    its travel direction as of that moment (same priority as the live board:
+    couplet override -> movement -> terminal anchor). Pure function of raw + current
+    logic, so it self-heals and can be re-run when matching/direction logic changes."""
     if not db.enabled:
         return 0
-    buckets: dict = defaultdict(lambda: [0, 0, 0])          # (hour_start, name) -> [ons, offs, n]
-    for vehicle_id, event_time, lat, lon, ons, offs in db.fetch_raw_day(service_date):
-        if not (ons or offs):                               # boarding/alighting activity only
-            continue
-        if at_vmf(lat, lon):                                # non-revenue -> excluded
-            continue
-        hit = stops.nearest(lat, lon)
-        name = hit[1] if hit else UNMATCHED                 # unresolved still counts toward totals
-        bt = event_time.astimezone(core.AGENCY_TZ).replace(minute=0, second=0, microsecond=0)
-        b = buckets[(bt, name)]
-        b[0] += ons
-        b[1] += offs
-        b[2] += 1
-    rows = [(bt, service_date, name, o, f, n)
-            for (bt, name), (o, f, n) in buckets.items()]
+    by_vehicle: dict = defaultdict(list)
+    for _id, vehicle_id, event_time, lat, lon, ons, offs in db.fetch_raw_day(service_date):
+        by_vehicle[vehicle_id].append({
+            "id": _id,
+            "_t": event_time.astimezone(core.AGENCY_TZ).replace(tzinfo=None),  # naive local
+            "lat": lat, "lon": lon, "ons": ons, "offs": offs,
+            "terminal": is_terminal(lat, lon),
+        })
+
+    buckets: dict = defaultdict(lambda: [0, 0, 0])       # (hour, name, direction) -> [ons,offs,n]
+    for evs in by_vehicle.values():
+        evs.sort(key=lambda e: (e["_t"], e["id"]))
+        for i, e in enumerate(evs):
+            if not (e["ons"] or e["offs"]):              # boarding/alighting activity only
+                continue
+            if at_vmf(e["lat"], e["lon"]):               # non-revenue -> excluded
+                continue
+            hit = stops.nearest(e["lat"], e["lon"])
+            name = hit[1] if hit else UNMATCHED
+            direction = direction_override(name) or infer_direction(evs[:i + 1]) or "Unknown"
+            bt = e["_t"].replace(minute=0, second=0, microsecond=0, tzinfo=core.AGENCY_TZ)
+            b = buckets[(bt, name, direction)]
+            b[0] += e["ons"]
+            b[1] += e["offs"]
+            b[2] += 1
+    rows = [(bt, service_date, name, direction, o, f, n)
+            for (bt, name, direction), (o, f, n) in buckets.items()]
     db.replace_stop_hourly(service_date, rows)
     return len(rows)
 
@@ -376,16 +388,23 @@ def rebuild_stop_hourly(from_date, to_date) -> None:
 
 
 def refresh_rollups() -> None:
-    """Backfill recent days once at startup, then refresh today on a throttle."""
+    """On startup: build any raw dates missing from the rollup, plus today+yesterday.
+    Thereafter: refresh today+yesterday on a throttle (yesterday catches late uploads
+    and cross-midnight runs; older days are immutable)."""
     global _last_rollup
     if not db.enabled:
         return
     today = datetime.now(core.AGENCY_TZ).date()
-    if _last_rollup == 0.0:                                  # first pass -> backfill window
-        rebuild_stop_hourly(today - timedelta(days=ROLLUP_BACKFILL_DAYS - 1), today)
+    yesterday = today - timedelta(days=1)
+    if _last_rollup == 0.0:                              # first pass after startup
+        for d in db.rollup_missing_dates():
+            build_stop_hourly(d)
+        build_stop_hourly(yesterday)
+        build_stop_hourly(today)
         _last_rollup = time.monotonic()
-        logging.info("rollups backfilled for last %d days", ROLLUP_BACKFILL_DAYS)
+        logging.info("rollups: startup rebuild complete")
     elif time.monotonic() - _last_rollup > ROLLUP_INTERVAL_S:
+        build_stop_hourly(yesterday)
         build_stop_hourly(today)
         _last_rollup = time.monotonic()
 
@@ -571,19 +590,29 @@ def api_report_summary():
                          "db_enabled": db.enabled})
 
 
-@app.get("/api/reports/busiest-stops")
-def api_report_busiest(hours: float = 24, limit: int = 10):
-    """Top stops by boardings+alightings over the last `hours` (4, 24, 168, 720, 8760…)."""
+@app.get("/api/reports/by-stop")
+def api_report_by_stop(hours: float = 24, limit: int = 100):
+    """Per-stop boardings/alightings split by travel direction plus a combined total,
+    over the last `hours`. Sorted by combined activity; feeds the sortable table."""
     since = datetime.now(core.AGENCY_TZ) - timedelta(hours=hours)
     rows = db.fetchall(
-        "SELECT stop_name, SUM(ons), SUM(offs), SUM(ons)+SUM(offs) AS activity "
+        "SELECT stop_name, "
+        "  COALESCE(SUM(ons)  FILTER (WHERE direction='Northbound'),0), "
+        "  COALESCE(SUM(offs) FILTER (WHERE direction='Northbound'),0), "
+        "  COALESCE(SUM(ons)  FILTER (WHERE direction='Southbound'),0), "
+        "  COALESCE(SUM(offs) FILTER (WHERE direction='Southbound'),0), "
+        "  SUM(ons), SUM(offs) "
         "FROM stop_hourly WHERE bucket_start >= %s AND stop_name <> %s "
-        "GROUP BY stop_name ORDER BY activity DESC LIMIT %s",
+        "GROUP BY stop_name ORDER BY SUM(ons)+SUM(offs) DESC LIMIT %s",
         (since, UNMATCHED, limit))
     return JSONResponse({
         "since": since.isoformat(timespec="seconds"), "hours": hours,
-        "stops": [{"stop": s, "ons": int(o), "offs": int(f), "activity": int(a)}
-                  for s, o, f, a in rows]})
+        "stops": [{
+            "stop": s,
+            "nb": {"ons": int(nbo), "offs": int(nbf)},
+            "sb": {"ons": int(sbo), "offs": int(sbf)},
+            "total": {"ons": int(o), "offs": int(f), "activity": int(o) + int(f)},
+        } for s, nbo, nbf, sbo, sbf, o, f in rows]})
 
 
 @app.get("/api/reports/daily")
