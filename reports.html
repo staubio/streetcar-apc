@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KC Streetcar · Reports</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0e131a; --bg-deep:#0a0e14; --panel:#151c26; --panel-2:#1a212c;
+    --line:#27313f; --ink:#e9eef5; --muted:#8b99aa; --faint:#5b6a7d;
+    --amber:#ffb02e; --good:#3fb27f; --bad:#ff6151; --brand:#0082d6;
+    --nb:#3fb27f; --sb:#ffb02e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg); color:var(--ink); font-family:"Barlow",system-ui,sans-serif;
+    line-height:1.4; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1180px; margin:0 auto; padding:0 20px 64px}
+
+  .topbar{display:flex; align-items:center; justify-content:space-between; gap:16px;
+    padding:20px 0 18px; border-bottom:1px solid var(--line);}
+  .brand{display:flex; align-items:baseline; gap:12px; font-family:"Barlow Condensed",sans-serif;
+    font-weight:700; letter-spacing:.04em; font-size:26px; text-transform:uppercase;}
+  .brand .sub{color:var(--brand); font-weight:600; letter-spacing:.14em; font-size:17px;}
+  .controls{display:flex; align-items:center; gap:14px; font-family:"IBM Plex Mono",monospace;
+    font-size:12.5px; color:var(--muted);}
+  .controls a{color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--faint);}
+  .controls a:hover{color:var(--ink)}
+  button{font-family:"IBM Plex Mono",monospace; font-size:12.5px; cursor:pointer;}
+  .controls button{color:var(--bg-deep); background:var(--brand); border:0; border-radius:5px;
+    padding:7px 14px; font-weight:600;}
+
+  .cards{display:flex; flex-wrap:wrap; gap:14px; margin:24px 0 8px;}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    padding:16px 20px; min-width:150px;}
+  .card .v{font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:40px; line-height:1;}
+  .card.hero .v{color:var(--brand)}
+  .card .sub{font-family:"Barlow",sans-serif; font-size:14px; color:var(--ink); margin-top:6px;
+    max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .card .l{color:var(--muted); font-size:12px; letter-spacing:.05em; text-transform:uppercase;
+    margin-top:8px;}
+
+  h2{font-family:"Barlow Condensed",sans-serif; font-weight:600; letter-spacing:.14em;
+    text-transform:uppercase; font-size:14px; color:var(--muted); margin:36px 0 12px;}
+
+  .chart{width:100%; height:160px; display:block;}
+  .chart-cap{display:flex; justify-content:space-between; font-family:"IBM Plex Mono",monospace;
+    font-size:11.5px; color:var(--faint); margin-top:6px;}
+
+  .toolbar{display:flex; align-items:center; gap:8px; margin:0 0 12px; flex-wrap:wrap;}
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden;}
+  .seg button{background:transparent; color:var(--muted); border:0; padding:6px 13px;}
+  .seg button.on{background:var(--brand); color:var(--bg-deep); font-weight:600;}
+  .since{font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--faint); margin-left:auto;}
+
+  .tablewrap{overflow-x:auto; border:1px solid var(--line); border-radius:8px;}
+  table{width:100%; border-collapse:collapse; font-size:14px; min-width:720px;}
+  th{font-family:"Barlow Condensed",sans-serif; font-weight:600; letter-spacing:.05em;
+    text-transform:uppercase; font-size:12px; color:var(--faint); padding:9px 12px;
+    border-bottom:1px solid var(--line); white-space:nowrap; text-align:right; cursor:pointer;
+    user-select:none; background:var(--bg-deep);}
+  th.l,td.l{text-align:left}
+  th:hover{color:var(--muted)}
+  th.nb{color:var(--nb)} th.sb{color:var(--sb)}
+  th .ar{opacity:.5; font-size:10px;}
+  td{padding:9px 12px; border-bottom:1px solid #1b232e; font-family:"IBM Plex Mono",monospace;
+    text-align:right; white-space:nowrap;}
+  td.l{font-family:"Barlow",sans-serif}
+  tr:hover td{background:var(--panel)}
+  td.tot{font-weight:600}
+  .z{color:var(--faint)}
+
+  .empty,.loading{color:var(--faint); padding:34px 12px; text-align:center; font-size:15px;}
+  .banner{margin:16px 0 0; padding:10px 14px; border-radius:6px; font-size:13px;
+    background:rgba(255,176,46,.08); border:1px solid rgba(255,176,46,.35); color:#ffd68a;
+    font-family:"IBM Plex Mono",monospace;}
+  [hidden]{display:none !important}
+  @media (max-width:640px){ .card .v{font-size:32px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="topbar">
+    <div class="brand">KC Streetcar<span class="sub">Reports</span></div>
+    <div class="controls">
+      <a href="/">&larr; Live board</a>
+      <span id="stamp"></span>
+      <button onclick="loadAll()">Refresh</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+  <div id="loading" class="loading">Loading reports…</div>
+
+  <div id="report" hidden>
+    <div class="cards">
+      <div class="card hero"><div class="v" id="c-board">—</div><div class="l">boardings today</div></div>
+      <div class="card"><div class="v" id="c-alight">—</div><div class="l">alightings today</div></div>
+      <div class="card"><div class="v" id="c-busy">—</div><div class="sub" id="c-busy-name">—</div><div class="l">busiest stop today</div></div>
+    </div>
+
+    <h2>Daily ridership · last 30 days</h2>
+    <div id="trend"></div>
+
+    <h2>By stop &amp; direction</h2>
+    <div class="toolbar">
+      <div class="seg" id="seg"></div>
+      <span class="since" id="since"></span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr id="thead"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => (n ?? 0).toLocaleString();
+const PERIODS = [["4h",4],["Day",24],["Week",168],["Month",720],["Year",8760]];
+const COLS = [
+  {k:"stop",  l:"Stop",   get:s=>s.stop,          num:false, cls:"l"},
+  {k:"nbon",  l:"NB On",  get:s=>s.nb.ons,        num:true,  grp:"nb"},
+  {k:"nboff", l:"NB Off", get:s=>s.nb.offs,       num:true,  grp:"nb"},
+  {k:"sbon",  l:"SB On",  get:s=>s.sb.ons,        num:true,  grp:"sb"},
+  {k:"sboff", l:"SB Off", get:s=>s.sb.offs,       num:true,  grp:"sb"},
+  {k:"on",    l:"On",     get:s=>s.total.ons,     num:true},
+  {k:"off",   l:"Off",    get:s=>s.total.offs,    num:true},
+  {k:"total", l:"Total",  get:s=>s.total.activity,num:true,  tot:true},
+];
+
+let hours = 24, sortKey = "total", sortDir = -1, stops = [];
+
+async function j(url){ const r = await fetch(url,{cache:"no-store"}); if(!r.ok) throw new Error(r.status); return r.json(); }
+
+function renderTrend(days){
+  const el = $("trend");
+  if(!days.length){ el.innerHTML = '<div class="empty">No daily data yet.</div>'; return; }
+  const max = Math.max(1, ...days.map(d=>d.boardings));
+  const step=22, bw=14, H=160, base=H-18, top=12, W=days.length*step;
+  const bars = days.map((d,i)=>{
+    const h = Math.round((d.boardings/max)*(base-top));
+    const x = i*step + (step-bw)/2;
+    return `<rect x="${x}" y="${base-h}" width="${bw}" height="${Math.max(h,0)}" fill="var(--brand)"><title>${d.date}: ${fmt(d.boardings)} boardings</title></rect>`;
+  }).join("");
+  el.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="chart">`
+    + `<line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="var(--line)"/>${bars}</svg>`
+    + `<div class="chart-cap"><span>${days[0].date}</span><span>peak ${fmt(max)}/day</span><span>${days[days.length-1].date}</span></div>`;
+}
+
+function renderSeg(){
+  $("seg").innerHTML = PERIODS.map(([label,h]) =>
+    `<button class="${h===hours?"on":""}" onclick="setHours(${h})">${label}</button>`).join("");
+}
+
+function renderHead(){
+  $("thead").innerHTML = COLS.map(c=>{
+    const active = c.k===sortKey ? `<span class="ar">${sortDir<0?"▼":"▲"}</span>` : "";
+    const cls = [c.cls||"", c.grp||""].join(" ").trim();
+    return `<th class="${cls}" onclick="sortBy('${c.k}')">${c.l} ${active}</th>`;
+  }).join("");
+}
+
+function renderRows(){
+  const col = COLS.find(c=>c.k===sortKey);
+  const sorted = [...stops].sort((a,b)=>{
+    const va=col.get(a), vb=col.get(b);
+    const cmp = col.num ? va-vb : String(va).localeCompare(String(vb));
+    return sortDir*cmp;
+  });
+  if(!sorted.length){ $("tbody").innerHTML = `<tr><td class="l" colspan="${COLS.length}" style="color:var(--faint)">No ridership in this window yet.</td></tr>`; return; }
+  $("tbody").innerHTML = sorted.map(s=>{
+    const cell = c=>{ const v=c.get(s); const z=(c.num&&!v)?"z":""; const t=c.tot?"tot":"";
+      return `<td class="${c.cls||""} ${z} ${t}">${c.num?fmt(v):v}</td>`; };
+    return `<tr>${COLS.map(cell).join("")}</tr>`;
+  }).join("");
+}
+
+function sortBy(k){
+  if(sortKey===k){ sortDir = -sortDir; }
+  else { sortKey = k; sortDir = (k==="stop") ? 1 : -1; }
+  renderHead(); renderRows();
+}
+
+async function setHours(h){
+  hours = h; renderSeg();
+  try{
+    const d = await j(`/api/reports/by-stop?hours=${h}`);
+    stops = d.stops || [];
+    const since = new Date(d.since);
+    $("since").textContent = "since " + since.toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+    renderHead(); renderRows();
+  }catch(e){ $("since").textContent = "load failed"; }
+}
+
+async function loadAll(){
+  $("loading").hidden = false; $("report").hidden = true; $("banner").hidden = true;
+  try{
+    const [sum, daily] = await Promise.all([
+      j("/api/reports/summary"),
+      j("/api/reports/daily?days=30"),
+    ]);
+    if(!sum.db_enabled){
+      $("banner").textContent = "Database not connected — reports populate once persistence is enabled.";
+      $("banner").hidden = false;
+    }
+    $("stamp").textContent = sum.date;
+    $("c-board").textContent = fmt(sum.boardings);
+    $("c-alight").textContent = fmt(sum.alightings);
+
+    renderTrend(daily.days || []);
+    renderSeg();
+    await setHours(hours);
+
+    // busiest today from the 24h view
+    const today = await j("/api/reports/by-stop?hours=24&limit=1");
+    if(today.stops && today.stops.length){
+      $("c-busy").textContent = fmt(today.stops[0].total.activity);
+      $("c-busy-name").textContent = today.stops[0].stop;
+    } else { $("c-busy").textContent = "—"; $("c-busy-name").textContent = "no activity yet"; }
+
+    $("loading").hidden = true; $("report").hidden = false;
+  }catch(e){
+    $("loading").textContent = "Couldn't load reports — retrying may help. (" + e.message + ")";
+  }
+}
+
+loadAll();
+</script>
+</body>
+</html>

@@ -651,6 +651,11 @@ def gps_page():
     return FileResponse(os.path.join(HERE, "gps.html"))
 
 
+@app.get("/reports")
+def reports_page():
+    return FileResponse(os.path.join(HERE, "reports.html"))
+
+
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0",
                 port=int(os.environ.get("PORT", "8000")))

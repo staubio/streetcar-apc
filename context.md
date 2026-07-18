@@ -28,6 +28,7 @@ re-deriving the design.
 | `app.py` | FastAPI service. Background poller, in-memory live state, `/api/state` JSON, serves `index.html`. **All app logic lives here.** |
 | `index.html` | Thin frontend. Polls `/api/state` every ~4s and renders. No business logic. |
 | `gps.html` | On-demand GPS-diagnostics page (served at `/gps`). Calls `/api/gps-diagnostics`. |
+| `reports.html` | Ridership reports page (served at `/reports`). Cumulative counter, daily trend, sortable directional by-stop table. Calls `/api/reports/*`. |
 | `db.py` | Postgres persistence (Phase 1: raw event capture). No-op unless `DATABASE_URL` is set. |
 | `schema.sql` | Reference DDL. Phase 1 (`apc_events`) is auto-created by `db.init_schema()`; Phase 2 rollups are commented. |
 | `requirements.txt` | `requests`, `fastapi`, `uvicorn[standard]`, `tzdata`. |
