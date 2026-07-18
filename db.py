@@ -22,7 +22,13 @@ except ImportError:                              # library not installed -> stay
     psycopg2 = None
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-enabled = bool(DATABASE_URL and psycopg2)
+if psycopg2 is None:
+    DISABLED_REASON = "psycopg2 not installed"
+elif not DATABASE_URL:
+    DISABLED_REASON = "DATABASE_URL not set"
+else:
+    DISABLED_REASON = None
+enabled = DISABLED_REASON is None
 
 _conn = None
 _lock = threading.Lock()

@@ -30,6 +30,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
 import swiftly_apc_tracker as core
+import db
 
 ACTIVE_WINDOW_MIN = 30     # a vehicle is "active" if it reported within this many minutes
 FEED_MAX = 120            # stop-visits retained for the activity ticker
@@ -302,10 +303,49 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
         state.updated_at = now.isoformat(timespec="seconds")
         state.error = None
 
+    capture_events(by_vehicle)                   # persist raw events (no-op without a DB)
+
+
+_captured_hw = 0                                 # largest event id already persisted
+
+
+def capture_events(by_vehicle: dict[str, list[dict]]) -> None:
+    """Insert new raw events into the DB, deduped by id. Advances the high-water
+    mark only on a successful write, so a DB outage just retries next poll."""
+    global _captured_hw
+    if not db.enabled:
+        return
+    hw = _captured_hw
+    rows = []
+    new_hw = hw
+    for evs in by_vehicle.values():
+        for e in evs:
+            if e["id"] <= hw:
+                continue
+            rows.append((e["id"], e["vehicle"],
+                         e["_t"].replace(tzinfo=core.AGENCY_TZ), e["_t"].date(),
+                         e["lat"], e["lon"], e["ons"], e["offs"]))
+            if e["id"] > new_hw:
+                new_hw = e["id"]
+    if not rows:
+        return
+    inserted = db.insert_events(rows)
+    if inserted is not None:                      # None = write failed -> keep hw, retry
+        _captured_hw = new_hw
+        if inserted:
+            logging.info("captured %d new raw events (high-water id=%d)", inserted, new_hw)
+
 
 def poller() -> None:
+    global _captured_hw
     session = requests.Session()
     limiter = core.RateLimiter()
+    if db.enabled:
+        db.init_schema()
+        _captured_hw = db.high_water()
+        logging.info("raw capture enabled (high-water id=%d)", _captured_hw)
+    else:
+        logging.info("raw capture disabled (%s)", db.DISABLED_REASON)
     while True:
         try:
             poll_once(session, limiter)
