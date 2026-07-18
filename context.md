@@ -140,7 +140,24 @@ Priority order:
 - Known gaps to close in Phase 2: (a) the high-water race can rarely skip an
   out-of-order-committed id — a periodic full-day reconcile fixes it; (b) events
   missed during long downtime older than the fetch lookback need an explicit
-  backfill (fetch specific past dates); (c) build the rollup tables and report APIs.
+  backfill (fetch specific past dates).
+
+### Rollups & reports (`build_stop_hourly`, Phase 2)
+- **Stack is flat, not a cascade.** `apc_events` (raw) → `stop_hourly` (per stop,
+  per hour). Coarser periods (day/week/month/year, last-4h) are **aggregate-on-read**
+  `GROUP BY` queries over `stop_hourly`, not stored tables — the table is small
+  enough (~300k rows/yr) that this is instant. `vehicle_daily` (planned) is a
+  *sibling* off raw, not a child (peak-onboard needs the occupancy walk).
+- `build_stop_hourly(date)` reads that date's raw, resolves each door-active event
+  via the same `StopIndex`/VMF logic, buckets by (hour, stop_name), and full-replaces
+  the date's rollup rows (idempotent, rebuildable when logic changes). Unresolved
+  activity goes to a `(unmatched)` bucket so per-stop rows still reconcile to system
+  totals; VMF activity is excluded.
+- The poller backfills the last `ROLLUP_BACKFILL_DAYS` (3) on startup, then refreshes
+  today every `ROLLUP_INTERVAL_S` (300s). Ridership = boardings (`SUM(ons)`).
+- Report endpoints: `/api/reports/summary` (today's totals), `/api/reports/busiest-stops?hours=`
+  (top stops over a window, excludes `(unmatched)`), `/api/reports/daily?days=|frm=|to=`
+  (per-day totals, custom range). All degrade to empty without a DB.
 - Served at `/gps` (page) + `/api/gps-diagnostics` (JSON). **Not** part of the poll
   loop — computed fresh per request, so it can do a full-day scan cheaply.
 - Method: an event with a boarding or alighting (`ons>0 or offs>0`, excluding VMF)

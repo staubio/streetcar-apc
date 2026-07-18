@@ -20,28 +20,25 @@ CREATE TABLE IF NOT EXISTS apc_events (
 CREATE INDEX IF NOT EXISTS apc_events_service_date_idx ON apc_events (service_date);
 CREATE INDEX IF NOT EXISTS apc_events_vehicle_time_idx ON apc_events (vehicle_id, event_time);
 
+-- Layer 2 (active) — per-stop, per-hour rollup. Derived from apc_events + the app's
+-- stop resolution, rebuildable any time. Drives all stop/ridership reports at any
+-- time granularity (coarser periods are aggregate-on-read, not stored tables).
+CREATE TABLE IF NOT EXISTS stop_hourly (
+    bucket_start TIMESTAMPTZ NOT NULL,          -- start of the hour, agency-local instant
+    service_date DATE        NOT NULL,          -- agency-local date, for daily grouping
+    stop_name    TEXT        NOT NULL,          -- '(unmatched)' if activity didn't resolve
+    ons          INTEGER     NOT NULL,
+    offs         INTEGER     NOT NULL,
+    events       INTEGER     NOT NULL,
+    PRIMARY KEY (bucket_start, stop_name)
+);
+CREATE INDEX IF NOT EXISTS stop_hourly_date_idx ON stop_hourly (service_date);
+CREATE INDEX IF NOT EXISTS stop_hourly_stop_idx ON stop_hourly (stop_name);
+
 -- ---------------------------------------------------------------------------
--- Phase 2 (planned) — derived rollups, rebuilt from apc_events. Not created yet.
+-- Phase 2 remaining (planned) — a sibling rollup off raw, not a child of stop_hourly.
 --
--- CREATE TABLE stops (
---     stop_id     TEXT PRIMARY KEY,
---     stop_name   TEXT NOT NULL,
---     latitude    DOUBLE PRECISION,
---     longitude   DOUBLE PRECISION,
---     is_terminal BOOLEAN DEFAULT false
--- );
---
--- CREATE TABLE stop_hourly (                    -- the workhorse rollup
---     service_date DATE     NOT NULL,
---     hour         SMALLINT NOT NULL,           -- 0..23 agency-local
---     stop_name    TEXT     NOT NULL,           -- name -> NB/SB variants merge
---     ons          INTEGER  NOT NULL,
---     offs         INTEGER  NOT NULL,
---     visits       INTEGER  NOT NULL,
---     PRIMARY KEY (service_date, hour, stop_name)
--- );
---
--- CREATE TABLE vehicle_daily (
+-- CREATE TABLE vehicle_daily (              -- needs the occupancy walk for peak_onboard
 --     service_date DATE NOT NULL,
 --     vehicle_id   TEXT NOT NULL,
 --     boardings    INTEGER NOT NULL,

@@ -47,6 +47,20 @@ CREATE TABLE IF NOT EXISTS apc_events (
 );
 CREATE INDEX IF NOT EXISTS apc_events_service_date_idx ON apc_events (service_date);
 CREATE INDEX IF NOT EXISTS apc_events_vehicle_time_idx ON apc_events (vehicle_id, event_time);
+
+-- Layer 2: per-stop, per-hour rollup. Derived from apc_events + the app's stop
+-- resolution; rebuildable at any time. Drives every stop/ridership report.
+CREATE TABLE IF NOT EXISTS stop_hourly (
+    bucket_start TIMESTAMPTZ NOT NULL,          -- start of the hour, agency-local instant
+    service_date DATE        NOT NULL,          -- agency-local date, for daily grouping
+    stop_name    TEXT        NOT NULL,          -- '(unmatched)' if activity didn't resolve
+    ons          INTEGER     NOT NULL,
+    offs         INTEGER     NOT NULL,
+    events       INTEGER     NOT NULL,          -- door-active event count in the bucket
+    PRIMARY KEY (bucket_start, stop_name)
+);
+CREATE INDEX IF NOT EXISTS stop_hourly_date_idx ON stop_hourly (service_date);
+CREATE INDEX IF NOT EXISTS stop_hourly_stop_idx ON stop_hourly (stop_name);
 """
 
 _INSERT = (
@@ -128,3 +142,61 @@ def insert_events(rows) -> int | None:
             logging.exception("db: insert_events failed")
             _reset()
             return None
+
+
+def fetch_raw_day(service_date):
+    """All raw events for a service date, for (re)building rollups from source."""
+    if not enabled:
+        return []
+    with _lock:
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT vehicle_id, event_time, latitude, longitude, ons, offs "
+                    "FROM apc_events WHERE service_date = %s", (service_date,))
+                return cur.fetchall()
+        except Exception:
+            logging.exception("db: fetch_raw_day failed")
+            _reset()
+            return []
+
+
+def replace_stop_hourly(service_date, rows) -> bool:
+    """Idempotently replace one service date's rollup: delete then insert, in one txn.
+    rows: (bucket_start, service_date, stop_name, ons, offs, events)."""
+    if not enabled:
+        return False
+    with _lock:
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM stop_hourly WHERE service_date = %s", (service_date,))
+                if rows:
+                    execute_values(
+                        cur,
+                        "INSERT INTO stop_hourly "
+                        "(bucket_start, service_date, stop_name, ons, offs, events) VALUES %s",
+                        list(rows), page_size=1000)
+            conn.commit()
+            return True
+        except Exception:
+            logging.exception("db: replace_stop_hourly failed")
+            _reset()
+            return False
+
+
+def fetchall(sql, params=()):
+    """Generic read helper for report queries."""
+    if not enabled:
+        return []
+    with _lock:
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
+        except Exception:
+            logging.exception("db: query failed")
+            _reset()
+            return []

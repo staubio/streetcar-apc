@@ -22,7 +22,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import requests
 import uvicorn
@@ -336,6 +336,60 @@ def capture_events(by_vehicle: dict[str, list[dict]]) -> None:
             logging.info("captured %d new raw events (high-water id=%d)", inserted, new_hw)
 
 
+# ---- Rollups (derived from raw; rebuildable) ---------------------------------
+ROLLUP_INTERVAL_S = 300          # refresh today's rollup at most this often
+ROLLUP_BACKFILL_DAYS = 3         # on startup, (re)build rollups for the last N days
+UNMATCHED = "(unmatched)"        # bucket for door activity that didn't resolve to a stop
+_last_rollup = 0.0
+
+
+def build_stop_hourly(service_date) -> int:
+    """Rebuild one service date's stop_hourly rollup from raw. Pure function of the
+    raw events + the current stop-resolution logic, so it self-heals and can be
+    re-run any time the matching logic changes. Returns rows written."""
+    if not db.enabled:
+        return 0
+    buckets: dict = defaultdict(lambda: [0, 0, 0])          # (hour_start, name) -> [ons, offs, n]
+    for vehicle_id, event_time, lat, lon, ons, offs in db.fetch_raw_day(service_date):
+        if not (ons or offs):                               # boarding/alighting activity only
+            continue
+        if at_vmf(lat, lon):                                # non-revenue -> excluded
+            continue
+        hit = stops.nearest(lat, lon)
+        name = hit[1] if hit else UNMATCHED                 # unresolved still counts toward totals
+        bt = event_time.astimezone(core.AGENCY_TZ).replace(minute=0, second=0, microsecond=0)
+        b = buckets[(bt, name)]
+        b[0] += ons
+        b[1] += offs
+        b[2] += 1
+    rows = [(bt, service_date, name, o, f, n)
+            for (bt, name), (o, f, n) in buckets.items()]
+    db.replace_stop_hourly(service_date, rows)
+    return len(rows)
+
+
+def rebuild_stop_hourly(from_date, to_date) -> None:
+    d = from_date
+    while d <= to_date:
+        build_stop_hourly(d)
+        d += timedelta(days=1)
+
+
+def refresh_rollups() -> None:
+    """Backfill recent days once at startup, then refresh today on a throttle."""
+    global _last_rollup
+    if not db.enabled:
+        return
+    today = datetime.now(core.AGENCY_TZ).date()
+    if _last_rollup == 0.0:                                  # first pass -> backfill window
+        rebuild_stop_hourly(today - timedelta(days=ROLLUP_BACKFILL_DAYS - 1), today)
+        _last_rollup = time.monotonic()
+        logging.info("rollups backfilled for last %d days", ROLLUP_BACKFILL_DAYS)
+    elif time.monotonic() - _last_rollup > ROLLUP_INTERVAL_S:
+        build_stop_hourly(today)
+        _last_rollup = time.monotonic()
+
+
 def poller() -> None:
     global _captured_hw
     session = requests.Session()
@@ -349,6 +403,7 @@ def poller() -> None:
     while True:
         try:
             poll_once(session, limiter)
+            refresh_rollups()
         except Exception as exc:                         # keep the service up; surface it
             logging.exception("poll failed")
             with state.lock:
@@ -501,6 +556,51 @@ def compute_gps_diagnostics() -> dict:
 @app.get("/api/state")
 def api_state():
     return JSONResponse(state.snapshot())
+
+
+@app.get("/api/reports/summary")
+def api_report_summary():
+    """Today's cumulative ridership so far (boardings = ons)."""
+    today = datetime.now(core.AGENCY_TZ).date()
+    rows = db.fetchall(
+        "SELECT COALESCE(SUM(ons),0), COALESCE(SUM(offs),0) FROM stop_hourly "
+        "WHERE service_date = %s", (today,))
+    ons, offs = rows[0] if rows else (0, 0)
+    return JSONResponse({"date": today.isoformat(),
+                         "boardings": int(ons), "alightings": int(offs),
+                         "db_enabled": db.enabled})
+
+
+@app.get("/api/reports/busiest-stops")
+def api_report_busiest(hours: float = 24, limit: int = 10):
+    """Top stops by boardings+alightings over the last `hours` (4, 24, 168, 720, 8760…)."""
+    since = datetime.now(core.AGENCY_TZ) - timedelta(hours=hours)
+    rows = db.fetchall(
+        "SELECT stop_name, SUM(ons), SUM(offs), SUM(ons)+SUM(offs) AS activity "
+        "FROM stop_hourly WHERE bucket_start >= %s AND stop_name <> %s "
+        "GROUP BY stop_name ORDER BY activity DESC LIMIT %s",
+        (since, UNMATCHED, limit))
+    return JSONResponse({
+        "since": since.isoformat(timespec="seconds"), "hours": hours,
+        "stops": [{"stop": s, "ons": int(o), "offs": int(f), "activity": int(a)}
+                  for s, o, f, a in rows]})
+
+
+@app.get("/api/reports/daily")
+def api_report_daily(days: int = 30, frm: str | None = None, to: str | None = None):
+    """Per-day boardings/alightings. Defaults to the last `days`; pass frm/to (YYYY-MM-DD)
+    for a custom range."""
+    today = datetime.now(core.AGENCY_TZ).date()
+    start = date.fromisoformat(frm) if frm else today - timedelta(days=days - 1)
+    end = date.fromisoformat(to) if to else today
+    rows = db.fetchall(
+        "SELECT service_date, SUM(ons), SUM(offs) FROM stop_hourly "
+        "WHERE service_date BETWEEN %s AND %s GROUP BY service_date ORDER BY service_date",
+        (start, end))
+    return JSONResponse({
+        "from": start.isoformat(), "to": end.isoformat(),
+        "days": [{"date": d.isoformat(), "boardings": int(o), "alightings": int(f)}
+                 for d, o, f in rows]})
 
 
 @app.get("/api/gps-diagnostics")
