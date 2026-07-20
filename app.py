@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import hmac
 import os
 import threading
 import time
@@ -26,7 +27,7 @@ from datetime import date, datetime, timedelta
 
 import requests
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from fastapi.responses import FileResponse, JSONResponse
 
 import swiftly_apc_tracker as core
@@ -387,6 +388,37 @@ def rebuild_stop_hourly(from_date, to_date) -> None:
         d += timedelta(days=1)
 
 
+# ---- On-demand rebuild (token-gated, background) -----------------------------
+# Re-derive rollups from raw after a logic/data change. Defaults to ALL captured
+# dates so the whole table stays on one consistent logic version -- rebuilding only
+# a slice would leave old and new logic mixed (see the WW1/WWI merge fix).
+REBUILD_TOKEN = os.environ.get("REBUILD_TOKEN")
+_rebuild_lock = threading.Lock()
+_rebuild_status: dict = {"running": False, "started": None, "finished": None,
+                         "dates_total": 0, "dates_done": 0, "from": None, "to": None,
+                         "error": None}
+
+
+def _run_rebuild(dates) -> None:
+    try:
+        for i, d in enumerate(dates, 1):
+            build_stop_hourly(d)
+            _rebuild_status["dates_done"] = i
+        _rebuild_status["error"] = None
+        logging.info("rollup rebuild done: %d dates", len(dates))
+    except Exception as exc:
+        logging.exception("rollup rebuild failed")
+        _rebuild_status["error"] = str(exc)
+    finally:
+        _rebuild_status["running"] = False
+        _rebuild_status["finished"] = datetime.now(core.AGENCY_TZ).isoformat(timespec="seconds")
+        _rebuild_lock.release()
+
+
+def _rebuild_authorized(token) -> bool:
+    return bool(REBUILD_TOKEN) and bool(token) and hmac.compare_digest(token, REBUILD_TOKEN)
+
+
 def refresh_rollups() -> None:
     """On startup: build any raw dates missing from the rollup, plus today+yesterday.
     Thereafter: refresh today+yesterday on a throttle (yesterday catches late uploads
@@ -630,6 +662,53 @@ def api_report_daily(days: int = 30, frm: str | None = None, to: str | None = No
         "from": start.isoformat(), "to": end.isoformat(),
         "days": [{"date": d.isoformat(), "boardings": int(o), "alightings": int(f)}
                  for d, o, f in rows]})
+
+
+@app.post("/api/reports/rebuild")
+def api_rebuild(frm: str | None = None, to: str | None = None,
+                x_rebuild_token: str | None = Header(None)):
+    """Re-derive rollups from raw. No range = ALL captured dates (the safe default,
+    keeps the table on one logic version). Runs in the background; poll GET for status."""
+    if not REBUILD_TOKEN:
+        return JSONResponse({"error": "rebuild disabled (REBUILD_TOKEN not set)"}, status_code=503)
+    if not _rebuild_authorized(x_rebuild_token):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not db.enabled:
+        return JSONResponse({"error": "no database"}, status_code=503)
+    if not _rebuild_lock.acquire(blocking=False):
+        return JSONResponse({"status": "already running", **_rebuild_status}, status_code=409)
+    try:
+        if frm or to:                                    # explicit range (the niche case)
+            today = datetime.now(core.AGENCY_TZ).date()
+            start = date.fromisoformat(frm) if frm else today
+            end = date.fromisoformat(to) if to else today
+            dates, d = [], start
+            while d <= end:
+                dates.append(d)
+                d += timedelta(days=1)
+        else:                                            # default: everything captured
+            dates = db.all_service_dates()
+    except ValueError:
+        _rebuild_lock.release()
+        return JSONResponse({"error": "bad date (use YYYY-MM-DD)"}, status_code=400)
+
+    _rebuild_status.update({
+        "running": True, "started": datetime.now(core.AGENCY_TZ).isoformat(timespec="seconds"),
+        "finished": None, "dates_total": len(dates), "dates_done": 0,
+        "from": dates[0].isoformat() if dates else None,
+        "to": dates[-1].isoformat() if dates else None, "error": None})
+    threading.Thread(target=_run_rebuild, args=(dates,), daemon=True, name="rebuild").start()
+    return JSONResponse({"status": "started", "dates": len(dates),
+                         "from": _rebuild_status["from"], "to": _rebuild_status["to"]},
+                        status_code=202)
+
+
+@app.get("/api/reports/rebuild")
+def api_rebuild_status(x_rebuild_token: str | None = Header(None)):
+    """Progress of the most recent rebuild."""
+    if not _rebuild_authorized(x_rebuild_token):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return JSONResponse(_rebuild_status)
 
 
 @app.get("/api/gps-diagnostics")

@@ -162,6 +162,13 @@ Priority order:
   (per-stop NB/SB split + combined total, sorted by activity; excludes `(unmatched)`),
   `/api/reports/daily?days=|frm=|to=` (per-day totals, custom range). Degrade to empty
   without a DB.
+- **Rebuild** (`POST /api/reports/rebuild`, token-gated by `REBUILD_TOKEN` env var):
+  re-derives rollups from raw after a logic/data change. No range = ALL captured dates
+  (the safe default — a partial rebuild would leave old+new logic mixed). Optional
+  `frm`/`to` for the niche date-local case. Runs in a background thread (won't time out);
+  `GET` the same path (with the token) to poll progress. 503 if no token set, 401 if
+  wrong, 409 if one is already running. Invoke with curl:
+  `curl -X POST -H "X-Rebuild-Token: SECRET" https://<app>/api/reports/rebuild`.
 - Served at `/gps` (page) + `/api/gps-diagnostics` (JSON). **Not** part of the poll
   loop — computed fresh per request, so it can do a full-day scan cheaply.
 - Method: an event with a boarding or alighting (`ons>0 or offs>0`, excluding VMF)

@@ -192,6 +192,22 @@ def rollup_missing_dates():
             return []
 
 
+def all_service_dates():
+    """Every service date present in raw (for a full rebuild)."""
+    if not enabled:
+        return []
+    with _lock:
+        try:
+            conn = _get_conn()
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT service_date FROM apc_events ORDER BY service_date")
+                return [r[0] for r in cur.fetchall()]
+        except Exception:
+            logging.exception("db: all_service_dates failed")
+            _reset()
+            return []
+
+
 def replace_stop_hourly(service_date, rows) -> bool:
     """Idempotently replace one service date's rollup: delete then insert, in one txn.
     rows: (bucket_start, service_date, stop_name, direction, ons, offs, events)."""
