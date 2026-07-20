@@ -158,6 +158,11 @@ Priority order:
   stops naturally only ever get one direction's rows.
 - Startup: rebuild all raw dates missing from the rollup, plus today+yesterday; then
   refresh today+yesterday every `ROLLUP_INTERVAL_S` (300s). Ridership = `SUM(ons)`.
+- **Service day**: reports scope to a service day running `SERVICE_DAY_CUTOFF_H` (default
+  4am) to the same hour next day, so post-midnight running counts toward the day it
+  started. Applied at query time from `bucket_start` (raw stays a pure calendar fact),
+  so the cutoff can be retuned with just a rebuild. `service_day_start()` computes the
+  current one; summary + the "Day" toggle + busiest-today use it; daily groups by it.
 - Report endpoints: `/api/reports/summary` (today's totals), `/api/reports/by-stop?hours=`
   (per-stop NB/SB split + combined total, sorted by activity; excludes `(unmatched)`),
   `/api/reports/daily?days=|frm=|to=` (per-day totals, custom range). Degrade to empty

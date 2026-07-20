@@ -609,24 +609,55 @@ def api_state():
     return JSONResponse(state.snapshot())
 
 
+# A "service day" runs from SERVICE_DAY_CUTOFF_H one morning to the same hour the
+# next, so post-midnight running counts toward the day it started and the counter
+# resets in the pre-dawn quiet. Applied at query time (from bucket_start), so raw
+# stays a pure calendar fact and the cutoff can be retuned with just a rebuild.
+SERVICE_DAY_CUTOFF_H = int(os.environ.get("SERVICE_DAY_CUTOFF_H", "4"))
+TZ_NAME = getattr(core.AGENCY_TZ, "key", "America/Chicago")
+
+
+def service_day_start(dt=None):
+    """Start of the service day containing dt (agency-local, tz-aware)."""
+    dt = dt or datetime.now(core.AGENCY_TZ)
+    anchor = dt.replace(hour=SERVICE_DAY_CUTOFF_H, minute=0, second=0, microsecond=0)
+    if dt < anchor:                                  # before the cutoff -> prior service day
+        anchor -= timedelta(days=1)
+    return anchor
+
+
+def _service_day_start_for(d):
+    """Service-day start for a given service-day date."""
+    return datetime(d.year, d.month, d.day, SERVICE_DAY_CUTOFF_H, tzinfo=core.AGENCY_TZ)
+
+
 @app.get("/api/reports/summary")
 def api_report_summary():
-    """Today's cumulative ridership so far (boardings = ons)."""
-    today = datetime.now(core.AGENCY_TZ).date()
+    """Boardings/alightings for the current service day so far."""
+    start = service_day_start()
+    end = start + timedelta(days=1)
     rows = db.fetchall(
         "SELECT COALESCE(SUM(ons),0), COALESCE(SUM(offs),0) FROM stop_hourly "
-        "WHERE service_date = %s", (today,))
+        "WHERE bucket_start >= %s AND bucket_start < %s", (start, end))
     ons, offs = rows[0] if rows else (0, 0)
-    return JSONResponse({"date": today.isoformat(),
+    return JSONResponse({"service_day": start.date().isoformat(),
                          "boardings": int(ons), "alightings": int(offs),
                          "db_enabled": db.enabled})
 
 
 @app.get("/api/reports/by-stop")
-def api_report_by_stop(hours: float = 24, limit: int = 100):
-    """Per-stop boardings/alightings split by travel direction plus a combined total,
-    over the last `hours`. Sorted by combined activity; feeds the sortable table."""
-    since = datetime.now(core.AGENCY_TZ) - timedelta(hours=hours)
+def api_report_by_stop(hours: float = 24, scope: str | None = None, limit: int = 100):
+    """Per-stop boardings/alightings split by direction plus a combined total. Either
+    a rolling window (`hours`) or the current service day (`scope=service_day`)."""
+    now = datetime.now(core.AGENCY_TZ)
+    if scope == "service_day":
+        since = service_day_start(now)
+        until = since + timedelta(days=1)
+        meta = {"scope": "service_day", "service_day": since.date().isoformat()}
+    else:
+        since = now - timedelta(hours=hours)
+        until = now + timedelta(days=1)              # effectively open (no future buckets)
+        meta = {"scope": "rolling", "hours": hours}
     rows = db.fetchall(
         "SELECT stop_name, "
         "  COALESCE(SUM(ons)  FILTER (WHERE direction='Northbound'),0), "
@@ -634,11 +665,11 @@ def api_report_by_stop(hours: float = 24, limit: int = 100):
         "  COALESCE(SUM(ons)  FILTER (WHERE direction='Southbound'),0), "
         "  COALESCE(SUM(offs) FILTER (WHERE direction='Southbound'),0), "
         "  SUM(ons), SUM(offs) "
-        "FROM stop_hourly WHERE bucket_start >= %s AND stop_name <> %s "
+        "FROM stop_hourly WHERE bucket_start >= %s AND bucket_start < %s AND stop_name <> %s "
         "GROUP BY stop_name ORDER BY SUM(ons)+SUM(offs) DESC LIMIT %s",
-        (since, UNMATCHED, limit))
+        (since, until, UNMATCHED, limit))
     return JSONResponse({
-        "since": since.isoformat(timespec="seconds"), "hours": hours,
+        "since": since.isoformat(timespec="seconds"), **meta,
         "stops": [{
             "stop": s,
             "nb": {"ons": int(nbo), "offs": int(nbf)},
@@ -649,17 +680,19 @@ def api_report_by_stop(hours: float = 24, limit: int = 100):
 
 @app.get("/api/reports/daily")
 def api_report_daily(days: int = 30, frm: str | None = None, to: str | None = None):
-    """Per-day boardings/alightings. Defaults to the last `days`; pass frm/to (YYYY-MM-DD)
-    for a custom range."""
-    today = datetime.now(core.AGENCY_TZ).date()
-    start = date.fromisoformat(frm) if frm else today - timedelta(days=days - 1)
-    end = date.fromisoformat(to) if to else today
+    """Per-service-day boardings/alightings. Defaults to the last `days` service days;
+    pass frm/to (YYYY-MM-DD service-day dates) for a custom range."""
+    cur = service_day_start()
+    start = _service_day_start_for(date.fromisoformat(frm)) if frm else cur - timedelta(days=days - 1)
+    end = (_service_day_start_for(date.fromisoformat(to)) if to else cur) + timedelta(days=1)
     rows = db.fetchall(
-        "SELECT service_date, SUM(ons), SUM(offs) FROM stop_hourly "
-        "WHERE service_date BETWEEN %s AND %s GROUP BY service_date ORDER BY service_date",
-        (start, end))
+        f"SELECT ((bucket_start AT TIME ZONE %s) - interval '{SERVICE_DAY_CUTOFF_H} hours')::date "
+        "AS sday, SUM(ons), SUM(offs) FROM stop_hourly "
+        "WHERE bucket_start >= %s AND bucket_start < %s GROUP BY sday ORDER BY sday",
+        (TZ_NAME, start, end))
     return JSONResponse({
-        "from": start.isoformat(), "to": end.isoformat(),
+        "from": start.date().isoformat(), "to": (end - timedelta(days=1)).date().isoformat(),
+        "cutoff_hour": SERVICE_DAY_CUTOFF_H,
         "days": [{"date": d.isoformat(), "boardings": int(o), "alightings": int(f)}
                  for d, o, f in rows]})
 
