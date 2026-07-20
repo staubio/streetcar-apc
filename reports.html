@@ -156,19 +156,21 @@ function renderTrend(days){
   _days = days;
   const el = $("trend");
   if(!days.length){ el.innerHTML = '<div class="empty">No daily data yet.</div>'; return; }
-  const W = Math.max(320, el.clientWidth || 900), H = 176, base = H-20, top = 22;
+  const W = Math.max(320, el.clientWidth || 900), H = 182, base = H-28, top = 22;
   const max = Math.max(1, ...days.map(d=>d.boardings));
   const step = W/days.length, bw = Math.min(30, step*0.66);
   const bars = days.map((d,i)=>{
     const h = Math.round((d.boardings/max)*(base-top));
     const cx = i*step + step/2, x = cx-bw/2, y = base-h;
-    const lbl = d.boardings ? `<text x="${cx.toFixed(1)}" y="${(y-5).toFixed(1)}" text-anchor="middle" class="barlbl">${fmt(d.boardings)}</text>` : "";
-    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h,0)}" rx="1.5" fill="var(--brand)"><title>${d.date}: ${fmt(d.boardings)} boardings</title></rect>${lbl}`;
+    const md = d.date.slice(5,7) + "/" + d.date.slice(8,10);
+    const val = d.boardings ? `<text x="${cx.toFixed(1)}" y="${(y-5).toFixed(1)}" text-anchor="middle" class="barlbl">${fmt(d.boardings)}</text>` : "";
+    const dt = `<text x="${cx.toFixed(1)}" y="${(base+14).toFixed(1)}" text-anchor="middle" class="barlbl">${md}</text>`;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h,0)}" rx="1.5" fill="var(--brand)"><title>${d.date}: ${fmt(d.boardings)} boardings</title></rect>${val}${dt}`;
   }).join("");
   el.innerHTML =
     `<svg width="${W}" height="${H}" class="chart" viewBox="0 0 ${W} ${H}">`
     + `<line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="var(--line)"/>${bars}</svg>`
-    + `<div class="chart-cap"><span>${days[0].date}</span><span>peak ${fmt(max)}/day</span><span>${days[days.length-1].date}</span></div>`;
+    + `<div class="chart-cap" style="justify-content:center"><span>peak ${fmt(max)}/day</span></div>`;
 }
 window.addEventListener("resize", () => { if(_days.length) renderTrend(_days); });
 
