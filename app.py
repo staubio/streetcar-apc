@@ -768,6 +768,31 @@ def reports_page():
     return FileResponse(os.path.join(HERE, "reports.html"))
 
 
+# Favicon + installable-web-app (PWA) icons, served from the app root.
+_ICONS = {
+    "favicon.ico": "image/x-icon",
+    "favicon.svg": "image/svg+xml",
+    "favicon-96x96.png": "image/png",
+    "apple-touch-icon.png": "image/png",
+    "web-app-manifest-192x192.png": "image/png",
+    "web-app-manifest-512x512.png": "image/png",
+    "site.webmanifest": "application/manifest+json",
+}
+
+
+def _icon_route(fname, media):
+    def serve():
+        path = os.path.join(HERE, "favicon", fname)
+        if not os.path.exists(path):                 # fall back to the app root
+            path = os.path.join(HERE, fname)
+        return FileResponse(path, media_type=media)
+    return serve
+
+
+for _fname, _media in _ICONS.items():
+    app.add_api_route(f"/{_fname}", _icon_route(_fname, _media), include_in_schema=False)
+
+
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0",
                 port=int(os.environ.get("PORT", "8000")))

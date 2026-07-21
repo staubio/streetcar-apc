@@ -31,6 +31,7 @@ re-deriving the design.
 | `reports.html` | Ridership reports page (served at `/reports`). Cumulative counter, daily trend, sortable directional by-stop table. Calls `/api/reports/*`. |
 | `db.py` | Postgres persistence (Phase 1: raw event capture). No-op unless `DATABASE_URL` is set. |
 | `schema.sql` | Reference DDL. Phase 1 (`apc_events`) is auto-created by `db.init_schema()`; Phase 2 rollups are commented. |
+| `site.webmanifest` + icon files | PWA manifest and favicon/app-icon set (`favicon.ico/.svg`, `favicon-96x96.png`, `apple-touch-icon.png`, `web-app-manifest-{192,512}.png`), served from `/` by app.py. All three pages link them; index.html is the installable start_url. |
 | `requirements.txt` | `requests`, `fastapi`, `uvicorn[standard]`, `tzdata`. |
 | `railway.json` | Railway deploy config (Railpack builder, start command, single replica). |
 | `stops.txt` | GTFS stops. **Currently the full agency feed — includes bus stops.** |
