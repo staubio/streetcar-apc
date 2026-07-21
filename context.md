@@ -75,6 +75,12 @@ Swiftly APC API ──poll──> poller thread ──> compute ──> LiveStat
 
 ## 5. Core algorithms & the reasoning behind them
 
+- **Glitch rejection**: a raw record whose `ons` or `offs` exceeds `MAX_DOOR_COUNT`
+  (default 100, env-tunable) is treated as a data glitch — its counts are ignored in
+  every account (occupancy, feed, rollups, diagnostics) via `core.counts_ok()`, while
+  the record is still stored raw so outliers stay available for analysis. The feed saw
+  real 749/587-type single-record counts; this keeps them out of the numbers.
+
 ### Occupancy (`occupancy_since_last_gap` in `swiftly_apc_tracker.py`)
 - Occupancy is a **pure function of the event set**, recomputed from scratch each
   poll and keyed on the unique `id`. Recompute (not accumulate) ⇒ an event can

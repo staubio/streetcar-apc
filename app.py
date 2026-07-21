@@ -251,6 +251,8 @@ def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
                 continue
             if e.get("nonrevenue"):                   # VMF / out of service -> not a visit
                 continue
+            if not core.counts_ok(e["ons"], e["offs"]):   # impossible count -> glitch, ignore
+                continue
             if cluster:
                 d = _move_m(cluster[0], e)
                 moved = d is not None and d > CLUSTER_RADIUS_M
@@ -364,6 +366,8 @@ def build_stop_hourly(service_date) -> int:
         evs.sort(key=lambda e: (e["_t"], e["id"]))
         for i, e in enumerate(evs):
             if not (e["ons"] or e["offs"]):              # boarding/alighting activity only
+                continue
+            if not core.counts_ok(e["ons"], e["offs"]):  # impossible count -> glitch, ignore
                 continue
             if at_vmf(e["lat"], e["lon"]):               # non-revenue -> excluded
                 continue
@@ -541,6 +545,8 @@ def compute_gps_diagnostics() -> dict:
     for e in events:
         ons, offs = e.get("ons") or 0, e.get("offs") or 0
         if not (ons or offs):                    # only confirmed at-stop events
+            continue
+        if not core.counts_ok(ons, offs):        # impossible count -> glitch, ignore
             continue
         lat, lon = e.get("latitude"), e.get("longitude")
         if at_vmf(lat, lon):                      # non-revenue -> excluded, but recorded

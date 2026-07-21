@@ -46,6 +46,16 @@ AGENCY_TZ = ZoneInfo("America/Chicago")      # KCATA = US Central; events are lo
 POLL_INTERVAL_S = 30
 GAP_RESET_HOURS = 3.0          # quiet gap that means "back at the depot / out of service"
 FLOOR_AT_ZERO = True           # clamp final occupancy to >= 0
+# Reject impossible single-record door counts (a raw-feed glitch: e.g. one door
+# reporting 749 boardings). Records over this are ignored in every account
+# (occupancy, feed, rollups, diagnostics) but still stored raw, so the outliers
+# stay available for analysis and can be re-derived if a pattern is ever found.
+MAX_DOOR_COUNT = int(os.environ.get("MAX_DOOR_COUNT", "100"))
+
+
+def counts_ok(ons, offs) -> bool:
+    """False for a record whose ons or offs exceeds MAX_DOOR_COUNT (a data glitch)."""
+    return (ons or 0) <= MAX_DOOR_COUNT and (offs or 0) <= MAX_DOOR_COUNT
 
 # Longest continuous run we must be able to reconstruct. A vehicle can pull out at
 # 05:45 and stay in service until 01:30 the next day (~20h) as drivers cycle in and
@@ -162,14 +172,17 @@ def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
             last_terminal_t = None
             last_t = t
             continue             # non-revenue: ignore its ons/offs entirely
+        # a glitch record (impossible count) keeps its position/terminal role but
+        # contributes no boardings/alightings
+        ons_e, offs_e = (e["ons"], e["offs"]) if counts_ok(e["ons"], e["offs"]) else (0, 0)
         if e.get("terminal"):
             if last_terminal_t is None or \
                     (t - last_terminal_t).total_seconds() > terminal_rearrive_s:
                 running = 0      # fresh arrival at turnback: everyone exits -> empty
-            running += e["ons"]  # count return-trip boardings; ignore deboarding offs
+            running += ons_e     # count return-trip boardings; ignore deboarding offs
             last_terminal_t = t
         else:
-            running += e["ons"] - e["offs"]
+            running += ons_e - offs_e
         if floor and running < 0:
             running = 0          # occupancy can't be negative; clamping here keeps a
                                  # mass deboarding (e.g. an unconfigured turnback) from
