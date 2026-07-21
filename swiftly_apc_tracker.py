@@ -144,7 +144,9 @@ def parse_event_time(s: str) -> datetime | None:
 
 def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
                              floor: bool = True,
-                             terminal_rearrive_s: float = 900) -> int:
+                             terminal_rearrive_s: float = 900,
+                             with_peak: bool = False,
+                             peak_since: datetime | None = None):
     """Sum ons - offs over a vehicle's events, resetting to 0 on each quiet gap
     and at terminal stops where every passenger must exit.
 
@@ -158,8 +160,14 @@ def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
     deboarding offs are ignored because the reset already accounts for them. The
     running total is floored at zero at every step, so a mass deboarding can never
     drive it negative and mask the boardings that follow.
+
+    With `with_peak`, also returns the highest running value seen (and the time it
+    occurred), counting only events at/after `peak_since` if given -> (final, peak,
+    peak_t). This drives the "peak load today" figure.
     """
     running = 0
+    peak = 0
+    peak_t: datetime | None = None
     last_t: datetime | None = None
     last_terminal_t: datetime | None = None
     for e in events:
@@ -187,8 +195,13 @@ def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
             running = 0          # occupancy can't be negative; clamping here keeps a
                                  # mass deboarding (e.g. an unconfigured turnback) from
                                  # masking the boardings that follow it
+        if with_peak and running > peak and (peak_since is None or t >= peak_since):
+            peak, peak_t = running, t
         last_t = t
-    return max(0, running) if floor else running
+    final = max(0, running) if floor else running
+    if with_peak:
+        return final, peak, peak_t
+    return final
 
 
 def gather_events(session: requests.Session, limiter: RateLimiter,

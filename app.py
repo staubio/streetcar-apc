@@ -192,6 +192,9 @@ class LiveState:
         self.feed: list[dict] = []
         self.updated_at: str | None = None
         self.error: str | None = None
+        self.peak_load: int = 0
+        self.peak_time: str | None = None
+        self.peak_vehicle: str | None = None
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -201,6 +204,9 @@ class LiveState:
                 "total_onboard": sum(v["count"] for v in self.vehicles),
                 "capacity": CAPACITY,
                 "stops_loaded": bool(stops.stops),
+                "peak_load": self.peak_load,
+                "peak_time": self.peak_time,
+                "peak_vehicle": self.peak_vehicle,
                 "vehicles": list(self.vehicles),
                 "feed": list(self.feed),
                 "error": self.error,
@@ -281,11 +287,16 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
     feed_since = now_naive - timedelta(minutes=FEED_WINDOW_MIN)
 
     vehicles: list[dict] = []
+    peak_load, peak_t, peak_veh = 0, None, None
+    since_naive = service_day_start(now).replace(tzinfo=None)   # current service day start
     for v, evs in by_vehicle.items():
         for e in evs:                                    # flag turnbacks + non-revenue
             e["terminal"] = is_terminal(e["lat"], e["lon"])
             e["nonrevenue"] = at_vmf(e["lat"], e["lon"])
-        count = core.occupancy_since_last_gap(evs, gap_s, core.FLOOR_AT_ZERO)
+        count, vpeak, vpeak_t = core.occupancy_since_last_gap(
+            evs, gap_s, core.FLOOR_AT_ZERO, with_peak=True, peak_since=since_naive)
+        if vpeak > peak_load:                            # highest any car reached today
+            peak_load, peak_t, peak_veh = vpeak, vpeak_t, v
         last = evs[-1]
         if last.get("nonrevenue"):                       # sitting at the VMF -> out of service
             continue
@@ -299,11 +310,15 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
     vehicles.sort(key=lambda x: (-x["count"], x["vehicle"]))   # busiest first
 
     feed = build_feed(by_vehicle, feed_since)
+    peak_time = peak_t.strftime("%I:%M %p").lstrip("0") if peak_t else None
 
     with state.lock:
         state.vehicles = vehicles
         state.feed = feed
         state.updated_at = now.isoformat(timespec="seconds")
+        state.peak_load = peak_load
+        state.peak_time = peak_time
+        state.peak_vehicle = peak_veh
         state.error = None
 
     capture_events(by_vehicle)                   # persist raw events (no-op without a DB)

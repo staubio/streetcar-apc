@@ -75,7 +75,11 @@ Swiftly APC API ──poll──> poller thread ──> compute ──> LiveStat
 
 ## 5. Core algorithms & the reasoning behind them
 
-- **Glitch rejection**: a raw record whose `ons` or `offs` exceeds `MAX_DOOR_COUNT`
+- **Peak load today**: `occupancy_since_last_gap(..., with_peak=True, peak_since=)` also
+  returns the highest running occupancy (and its time) at/after the service-day start.
+  The poller takes the max across all vehicles (even now-idle ones that peaked earlier)
+  and exposes `peak_load` / `peak_time` / `peak_vehicle` on `/api/state`; the live board
+  shows it as a "peak load today" stat with the time underneath.
   (default 100, env-tunable) is treated as a data glitch — its counts are ignored in
   every account (occupancy, feed, rollups, diagnostics) via `core.counts_ok()`, while
   the record is still stored raw so outliers stay available for analysis. The feed saw
