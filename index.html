@@ -155,8 +155,13 @@
     </div>
     <div>
       <div class="stat-num" id="peak">—</div>
-      <div class="stat-label">peak load today</div>
+      <div class="stat-label">peak vehicle load today</div>
       <div class="stat-when" id="peakwhen"></div>
+    </div>
+    <div>
+      <div class="stat-num" id="speak">—</div>
+      <div class="stat-label">peak system load today</div>
+      <div class="stat-when" id="speakwhen"></div>
     </div>
     <div class="stat-note" id="stopsnote">coordinates only</div>
   </section>
@@ -181,7 +186,8 @@
 
 <script>
 const POLL_MS = 4000;
-let capacity = 40;
+let capacity = 150;   // fallback only for the first render; overwritten by s.capacity
+                      // from /api/state every fetch (backend VEHICLE_CAPACITY, default 150)
 let lastUpdated = null;
 const seenFeed = new Set();   // feed ids already rendered (so only new rows animate)
 let firstFeedRender = true;
@@ -261,6 +267,8 @@ async function tick(){
     $("peakwhen").textContent = s.peak_time
       ? "at " + s.peak_time + (s.peak_vehicle ? " · car " + s.peak_vehicle : "")
       : "";
+    $("speak").textContent = s.system_peak || "—";
+    $("speakwhen").textContent = s.system_peak_time ? "at " + s.system_peak_time : "";
     $("updated").textContent = s.updated_at ? "updated " + hhmmss(s.updated_at) : "no data yet";
     lastUpdated = Date.now();
     $("ago").textContent = "";

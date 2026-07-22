@@ -35,7 +35,7 @@ import db
 
 ACTIVE_WINDOW_MIN = 30     # a vehicle is "active" if it reported within this many minutes
 FEED_MAX = 120            # stop-visits retained for the activity ticker
-CAPACITY = 150           # nominal capacity for the crowding bar (KC Streetcar ~150)
+CAPACITY = int(os.environ.get("VEHICLE_CAPACITY", "150"))   # nominal crowding-bar capacity (KC Streetcar ~150); env-tunable
 
 # Per-door reporting: one stop visit emits several records (one per door), and a
 # car can idle 5-10 min at a terminus while riders trickle on. So cluster by
@@ -195,6 +195,8 @@ class LiveState:
         self.peak_load: int = 0
         self.peak_time: str | None = None
         self.peak_vehicle: str | None = None
+        self.system_peak: int = 0
+        self.system_peak_time: str | None = None
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -207,6 +209,8 @@ class LiveState:
                 "peak_load": self.peak_load,
                 "peak_time": self.peak_time,
                 "peak_vehicle": self.peak_vehicle,
+                "system_peak": self.system_peak,
+                "system_peak_time": self.system_peak_time,
                 "vehicles": list(self.vehicles),
                 "feed": list(self.feed),
                 "error": self.error,
@@ -278,6 +282,56 @@ def build_feed(by_vehicle: dict[str, list[dict]], since) -> list[dict]:
     return visits[:FEED_MAX]
 
 
+SYSTEM_PEAK_INTERVAL_S = 60      # recompute the system-wide peak at most this often
+_last_system_peak = 0.0
+
+
+def compute_system_peak(by_vehicle: dict, gap_s: float, since):
+    """Peak total passengers onboard across the whole system during the current
+    service day, i.e. the max over time of the sum of every vehicle's occupancy.
+
+    Each car's occupancy is a step function (from occupancy_since_last_gap's series);
+    a car contributes its occupancy for ACTIVE_WINDOW_MIN after each report, then
+    expires to 0 -- the same 30-min "active" rule that defines the live onboard total,
+    just evaluated at each historical instant instead of only now. We merge every
+    car's step-changes onto one timeline and sweep once, carrying a running total:
+    O(n log n) for the sort, O(n) for the sweep, over a few thousand points. Returns
+    (peak, peak_time)."""
+    stale = timedelta(minutes=ACTIVE_WINDOW_MIN)
+    changes = []                                  # (time, vehicle, new_contribution)
+    for v, evs in by_vehicle.items():
+        _, series = core.occupancy_since_last_gap(
+            evs, gap_s, core.FLOOR_AT_ZERO, with_series=True)
+        prev = 0
+        for i, (t, occ) in enumerate(series):
+            if occ != prev:                       # only emit where the load actually changes
+                changes.append((t, v, occ))
+                prev = occ
+            next_t = series[i + 1][0] if i + 1 < len(series) else None
+            # each report refreshes staleness; expire to 0 only when the car then goes
+            # quiet longer than the active window (heartbeats just push the expiry out)
+            if (next_t is None or t + stale < next_t) and prev != 0:
+                changes.append((t + stale, v, 0))
+                prev = 0
+    if not changes:
+        return 0, None
+    changes.sort(key=lambda c: c[0])
+    contrib: dict = {}
+    total = peak = 0
+    peak_t = None
+    entered = False
+    for t, v, val in changes:
+        if not entered and t >= since:            # carry-in load as we cross the boundary
+            if total > peak:
+                peak, peak_t = total, since
+            entered = True
+        total += val - contrib.get(v, 0)
+        contrib[v] = val
+        if t >= since and total > peak:
+            peak, peak_t = total, t
+    return peak, peak_t
+
+
 def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
     now = datetime.now(core.AGENCY_TZ)
     by_vehicle = core.gather_events(session, limiter, now)
@@ -322,6 +376,17 @@ def poll_once(session: requests.Session, limiter: core.RateLimiter) -> None:
         state.error = None
 
     capture_events(by_vehicle)                   # persist raw events (no-op without a DB)
+
+    # System peak runs AFTER the live board is published above, on a throttle -- so it
+    # can never sit in front of or slow the core live-load numbers. It's a cheap linear
+    # sweep, but decoupling it keeps that guarantee structural, not just "fast enough".
+    global _last_system_peak
+    if time.monotonic() - _last_system_peak > SYSTEM_PEAK_INTERVAL_S:
+        sp, sp_t = compute_system_peak(by_vehicle, gap_s, since_naive)
+        with state.lock:
+            state.system_peak = sp
+            state.system_peak_time = sp_t.strftime("%I:%M %p").lstrip("0") if sp_t else None
+        _last_system_peak = time.monotonic()
 
 
 _captured_hw = 0                                 # largest event id already persisted

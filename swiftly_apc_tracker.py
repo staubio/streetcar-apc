@@ -146,7 +146,8 @@ def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
                              floor: bool = True,
                              terminal_rearrive_s: float = 900,
                              with_peak: bool = False,
-                             peak_since: datetime | None = None):
+                             peak_since: datetime | None = None,
+                             with_series: bool = False):
     """Sum ons - offs over a vehicle's events, resetting to 0 on each quiet gap
     and at terminal stops where every passenger must exit.
 
@@ -161,13 +162,17 @@ def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
     running total is floored at zero at every step, so a mass deboarding can never
     drive it negative and mask the boardings that follow.
 
-    With `with_peak`, also returns the highest running value seen (and the time it
-    occurred), counting only events at/after `peak_since` if given -> (final, peak,
-    peak_t). This drives the "peak load today" figure.
+    Both extras are OFF by default, so the plain call the live board makes runs the
+    original path and returns a bare int:
+    - `with_peak`: also return the highest running value seen and its time (counting
+      only events at/after `peak_since`) -> (final, peak, peak_t).
+    - `with_series`: also return the (time, occupancy) step-series -> (final, series),
+      consumed by the system-peak sweep. (peak and series aren't requested together.)
     """
     running = 0
     peak = 0
     peak_t: datetime | None = None
+    series: list | None = [] if with_series else None
     last_t: datetime | None = None
     last_terminal_t: datetime | None = None
     for e in events:
@@ -179,6 +184,8 @@ def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
             running = 0          # at the maintenance facility -> out of service, empty
             last_terminal_t = None
             last_t = t
+            if series is not None:
+                series.append((t, 0))
             continue             # non-revenue: ignore its ons/offs entirely
         # a glitch record (impossible count) keeps its position/terminal role but
         # contributes no boardings/alightings
@@ -197,8 +204,12 @@ def occupancy_since_last_gap(events: list[dict], gap_reset_s: float,
                                  # masking the boardings that follow it
         if with_peak and running > peak and (peak_since is None or t >= peak_since):
             peak, peak_t = running, t
+        if series is not None:
+            series.append((t, running))
         last_t = t
     final = max(0, running) if floor else running
+    if with_series:
+        return final, series
     if with_peak:
         return final, peak, peak_t
     return final

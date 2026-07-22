@@ -79,7 +79,15 @@ Swiftly APC API ──poll──> poller thread ──> compute ──> LiveStat
   returns the highest running occupancy (and its time) at/after the service-day start.
   The poller takes the max across all vehicles (even now-idle ones that peaked earlier)
   and exposes `peak_load` / `peak_time` / `peak_vehicle` on `/api/state`; the live board
-  shows it as a "peak load today" stat with the time underneath.
+  shows it as "peak vehicle load today".
+- **Peak system load today**: `compute_system_peak` sweeps every vehicle's occupancy
+  step-series (from the default-off `with_series` flag) onto one timeline, applying the
+  same 30-min `ACTIVE_WINDOW_MIN` staleness that defines the live onboard total, and
+  tracks the max system-wide sum over the service day. Runs on a throttle
+  (`SYSTEM_PEAK_INTERVAL_S`, 60s) AFTER the live board is published in poll_once, so it
+  never sits in front of the core numbers; ~50ms at a full day's volume. Exposed as
+  `system_peak` / `system_peak_time`. Vehicle capacity for the crowding bar is
+  `VEHICLE_CAPACITY` (env, default 150), sent to the frontend via `/api/state`.
   (default 100, env-tunable) is treated as a data glitch — its counts are ignored in
   every account (occupancy, feed, rollups, diagnostics) via `core.counts_ok()`, while
   the record is still stored raw so outliers stay available for analysis. The feed saw
