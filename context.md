@@ -205,6 +205,10 @@ Priority order:
 - `/api/reports/by-stop?hours=|scope=service_day` — per-stop NB/SB split + combined
   total, sorted by activity, excludes `(unmatched)`. "Day" toggle sends `scope=service_day`.
 - `/api/reports/daily?days=|frm=|to=` — per-service-day totals for the trend.
+- `/api/reports/by-hour?days=|frm=|to=` — boardings by clock-hour, one series per
+  day-of-week, over the selected service days (`days` a multiple of 7). Multiple weeks
+  are **summed** per (weekday, hour); post-midnight hours attach to the service day that
+  started that morning, so the x-axis reads 05:00→02:00. Feeds the overlaid line chart.
 - All degrade to empty without a DB.
 
 ### Rebuild (`POST /api/reports/rebuild`, token-gated by `REBUILD_TOKEN`)

@@ -783,6 +783,41 @@ def api_report_daily(days: int = 30, frm: str | None = None, to: str | None = No
                  for d, o, f in rows]})
 
 
+BY_HOUR_HOURS = list(range(5, 24)) + [0, 1, 2]   # service-day x-axis: 05:00 -> 02:00
+
+
+@app.get("/api/reports/by-hour")
+def api_report_by_hour(days: int = 7, frm: str | None = None, to: str | None = None):
+    """Boardings by clock-hour, one series per day-of-week, over the selected service
+    days. `days` is meant to be a multiple of 7; multiple weeks are summed per
+    (weekday, hour). Post-midnight hours attach to the service day that started that
+    morning (so a Friday run reads 05:00->02:00 on the Friday line)."""
+    cur = service_day_start().date()
+    try:
+        start = date.fromisoformat(frm) if frm else cur - timedelta(days=days - 1)
+        end = date.fromisoformat(to) if to else cur
+    except ValueError:
+        return JSONResponse({"error": "bad date (use YYYY-MM-DD)"}, status_code=400)
+    start_ts = _service_day_start_for(start)
+    end_ts = _service_day_start_for(end) + timedelta(days=1)
+    rows = db.fetchall(
+        "SELECT EXTRACT(DOW FROM ((bucket_start AT TIME ZONE %s) - "
+        f"  interval '{SERVICE_DAY_CUTOFF_H} hours')::date)::int AS dow, "
+        "EXTRACT(HOUR FROM (bucket_start AT TIME ZONE %s))::int AS hr, SUM(ons)::int "
+        "FROM stop_hourly WHERE bucket_start >= %s AND bucket_start < %s "
+        "GROUP BY dow, hr", (TZ_NAME, TZ_NAME, start_ts, end_ts))
+    idx = {h: i for i, h in enumerate(BY_HOUR_HOURS)}
+    series = {d: [0] * len(BY_HOUR_HOURS) for d in range(7)}
+    for dow, hr, ons in rows:
+        if hr in idx:                                # keep only 05:00->02:00 service window
+            series[dow][idx[hr]] = int(ons)
+    return JSONResponse({
+        "hours": BY_HOUR_HOURS, "days": days,
+        "from": start.isoformat(), "to": end.isoformat(),
+        "series": [{"dow": d, "boardings": series[d]} for d in range(7)],
+    })
+
+
 @app.post("/api/reports/rebuild")
 def api_rebuild(frm: str | None = None, to: str | None = None,
                 x_rebuild_token: str | None = Header(None)):

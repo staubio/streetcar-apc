@@ -58,6 +58,13 @@
 
   .chart{display:block;}
   .barlbl{fill:var(--muted); font-family:"IBM Plex Mono",monospace; font-size:9px;}
+  .axis{fill:var(--faint); font-family:"IBM Plex Mono",monospace; font-size:9px;}
+  .grid{stroke:var(--line); stroke-width:1;}
+  .legend{display:flex; flex-wrap:wrap; gap:8px 16px; margin:8px 0 4px;
+    font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--muted);}
+  .legend .sw{display:inline-flex; align-items:center; gap:6px; cursor:pointer;}
+  .legend .sw.off{opacity:.35; text-decoration:line-through;}
+  .legend .dot{width:11px; height:11px; border-radius:2px; display:inline-block;}
   .chart-cap{display:flex; justify-content:space-between; font-family:"IBM Plex Mono",monospace;
     font-size:11.5px; color:var(--faint); margin-top:6px;}
 
@@ -119,6 +126,14 @@
 
     <h2>Daily ridership · last 30 service days</h2>
     <div id="trend"></div>
+
+    <h2>Boardings by hour · overlaid by weekday</h2>
+    <div class="toolbar">
+      <div class="seg" id="wkseg"></div>
+      <span class="since" id="bhrange"></span>
+    </div>
+    <div id="byhour"></div>
+    <div class="legend" id="bhlegend"></div>
 
     <h2>By stop &amp; direction</h2>
     <div class="toolbar">
@@ -182,7 +197,71 @@ function renderTrend(days){
     + `<line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="var(--line)"/>${bars}</svg>`
     + `<div class="chart-cap" style="justify-content:center"><span>peak ${fmt(max)}/day</span></div>`;
 }
-window.addEventListener("resize", () => { if(_days.length) renderTrend(_days); });
+window.addEventListener("resize", () => { if(_days.length) renderTrend(_days); renderByHour(); });
+
+// ---- Boardings by hour, overlaid by weekday ----
+const DOW = [                                  // index = Postgres DOW (0=Sun .. 6=Sat)
+  {name:"Sun", color:"#f472b6"},
+  {name:"Mon", color:"#0082d6"},
+  {name:"Tue", color:"#3fb27f"},
+  {name:"Wed", color:"#ffb02e"},
+  {name:"Thu", color:"#ff6151"},
+  {name:"Fri", color:"#a78bfa"},
+  {name:"Sat", color:"#22d3ee"},
+];
+const LEGEND_ORDER = [1,2,3,4,5,6,0];          // Mon..Sun for the legend
+const WEEKS = [1,2,3,4];
+let weeks = 1, bhData = null, bhHidden = new Set();
+
+const hh = h => String(h).padStart(2,"0");     // 5 -> "05"
+
+function renderWkSeg(){
+  $("wkseg").innerHTML = WEEKS.map(w =>
+    `<button class="${w===weeks?"on":""}" onclick="setWeeks(${w})">${w} wk</button>`).join("");
+}
+
+function renderBhLegend(){
+  $("bhlegend").innerHTML = LEGEND_ORDER.map(dow =>
+    `<span class="sw ${bhHidden.has(dow)?"off":""}" onclick="toggleDow(${dow})"><span class="dot" style="background:${DOW[dow].color}"></span>${DOW[dow].name}</span>`).join("");
+}
+
+function toggleDow(dow){
+  bhHidden.has(dow) ? bhHidden.delete(dow) : bhHidden.add(dow);
+  renderBhLegend(); renderByHour();
+}
+
+function renderByHour(){
+  const el = $("byhour");
+  if(!bhData || !bhData.series){ el.innerHTML = '<div class="empty">No data yet.</div>'; return; }
+  const hours = bhData.hours, n = hours.length;
+  const W = Math.max(360, el.clientWidth || 900), H = 240;
+  const mL=40, mR=12, mT=12, mB=24, pw = W-mL-mR, ph = H-mT-mB;
+  let max = 1;                                  // y-scale from the visible series only
+  bhData.series.forEach(s => { if(!bhHidden.has(s.dow)) s.boardings.forEach(v => { if(v>max) max=v; }); });
+  const x = i => mL + (n<=1 ? 0 : i*pw/(n-1));
+  const y = v => mT + ph*(1 - v/max);
+  const ticks = [0, Math.round(max/2), max];
+  const grid = ticks.map(v =>
+    `<line class="grid" x1="${mL}" y1="${y(v).toFixed(1)}" x2="${W-mR}" y2="${y(v).toFixed(1)}"/>`
+    + `<text class="axis" x="${mL-6}" y="${(y(v)+3).toFixed(1)}" text-anchor="end">${fmt(v)}</text>`).join("");
+  const xlab = hours.map((h,i) => i%3===0
+    ? `<text class="axis" x="${x(i).toFixed(1)}" y="${H-8}" text-anchor="middle">${hh(h)}</text>` : "").join("");
+  const lines = bhData.series.filter(s => !bhHidden.has(s.dow)).map(s => {
+    const pts = s.boardings.map((v,i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    return `<polyline points="${pts}" fill="none" stroke="${DOW[s.dow].color}" stroke-width="1.8" stroke-linejoin="round"/>`;
+  }).join("");
+  el.innerHTML = `<svg width="${W}" height="${H}" class="chart" viewBox="0 0 ${W} ${H}">${grid}${xlab}${lines}</svg>`;
+}
+
+async function setWeeks(w){
+  weeks = w; renderWkSeg();
+  try{
+    bhData = await j(`/api/reports/by-hour?days=${w*7}`);
+    $("bhrange").textContent = `${bhData.from} → ${bhData.to} · summed`;
+    renderBhLegend(); renderByHour();
+  }catch(e){ $("bhrange").textContent = "load failed"; }
+}
+
 
 function renderSeg(){
   $("seg").innerHTML = PERIODS.map((p,i) =>
@@ -255,6 +334,7 @@ async function loadAll(){
 
     $("loading").hidden = true; $("report").hidden = false;
     renderTrend(daily.days || []);
+    renderWkSeg(); await setWeeks(weeks);
     await setPeriod(current);
 
     const busy = await j("/api/reports/by-stop?scope=service_day&limit=1");
