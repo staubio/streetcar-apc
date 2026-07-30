@@ -208,7 +208,10 @@ Priority order:
 - `/api/reports/by-hour?days=|frm=|to=` — boardings by clock-hour, one series per
   day-of-week, over the selected service days (`days` a multiple of 7). Multiple weeks
   are **summed** per (weekday, hour); post-midnight hours attach to the service day that
-  started that morning, so the x-axis reads 05:00→02:00. Feeds the overlaid line chart.
+  started that morning, so the x-axis reads 05:00→02:00. Week presets end at the **last
+  complete** service day (yesterday) to avoid a partial current day; `frm`/`to` (from the
+  page's date picker) override for an arbitrary range. Feeds the overlaid, per-weekday-
+  toggleable line chart.
 - All degrade to empty without a DB.
 
 ### Rebuild (`POST /api/reports/rebuild`, token-gated by `REBUILD_TOKEN`)

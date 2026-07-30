@@ -793,9 +793,10 @@ def api_report_by_hour(days: int = 7, frm: str | None = None, to: str | None = N
     (weekday, hour). Post-midnight hours attach to the service day that started that
     morning (so a Friday run reads 05:00->02:00 on the Friday line)."""
     cur = service_day_start().date()
+    last_complete = cur - timedelta(days=1)      # exclude the in-progress current service day
     try:
-        start = date.fromisoformat(frm) if frm else cur - timedelta(days=days - 1)
-        end = date.fromisoformat(to) if to else cur
+        start = date.fromisoformat(frm) if frm else last_complete - timedelta(days=days - 1)
+        end = date.fromisoformat(to) if to else last_complete
     except ValueError:
         return JSONResponse({"error": "bad date (use YYYY-MM-DD)"}, status_code=400)
     start_ts = _service_day_start_for(start)
