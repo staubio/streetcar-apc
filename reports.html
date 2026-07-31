@@ -132,7 +132,7 @@
     <h2>Daily ridership · last 30 service days</h2>
     <div id="trend"></div>
 
-    <h2>Boardings by hour · overlaid by weekday</h2>
+    <h2>Avg boardings by hour · overlaid by weekday</h2>
     <div class="toolbar">
       <div class="seg" id="wkseg"></div>
       <span class="picker">
@@ -268,7 +268,7 @@ async function loadByHour(qs){
     bhData = await j(`/api/reports/by-hour?${qs}`);
     $("bhfrom").value = bhData.from;             // buttons + fetch keep the picker in sync
     $("bhto").value = bhData.to;
-    $("bhrange").textContent = `${bhData.from} → ${bhData.to} · summed`;
+    $("bhrange").textContent = `${bhData.from} → ${bhData.to} · ${bhData.aggregate === "average" ? "avg/day" : "summed"}`;
     renderBhLegend(); renderByHour();
   }catch(e){ $("bhrange").textContent = "load failed"; }
 }

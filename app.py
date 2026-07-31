@@ -789,9 +789,10 @@ BY_HOUR_HOURS = list(range(5, 24)) + [0, 1, 2]   # service-day x-axis: 05:00 -> 
 @app.get("/api/reports/by-hour")
 def api_report_by_hour(days: int = 7, frm: str | None = None, to: str | None = None):
     """Boardings by clock-hour, one series per day-of-week, over the selected service
-    days. `days` is meant to be a multiple of 7; multiple weeks are summed per
-    (weekday, hour). Post-midnight hours attach to the service day that started that
-    morning (so a Friday run reads 05:00->02:00 on the Friday line)."""
+    days. `days` is meant to be a multiple of 7; each (weekday, hour) is **averaged**
+    over that weekday's occurrences in the range, so multi-week views read as a typical
+    day. Post-midnight hours attach to the service day that started that morning (so a
+    Friday run reads 05:00->02:00 on the Friday line)."""
     cur = service_day_start().date()
     last_complete = cur - timedelta(days=1)      # exclude the in-progress current service day
     try:
@@ -808,14 +809,25 @@ def api_report_by_hour(days: int = 7, frm: str | None = None, to: str | None = N
         "FROM stop_hourly WHERE bucket_start >= %s AND bucket_start < %s "
         "GROUP BY dow, hr", (TZ_NAME, TZ_NAME, start_ts, end_ts))
     idx = {h: i for i, h in enumerate(BY_HOUR_HOURS)}
-    series = {d: [0] * len(BY_HOUR_HOURS) for d in range(7)}
+    sums = {d: [0] * len(BY_HOUR_HOURS) for d in range(7)}
     for dow, hr, ons in rows:
         if hr in idx:                                # keep only 05:00->02:00 service window
-            series[dow][idx[hr]] = int(ons)
+            sums[dow][idx[hr]] = int(ons)
+    # how many of each weekday fall in [start, end] — the per-series divisor
+    counts = {d: 0 for d in range(7)}
+    day = start
+    while day <= end:
+        counts[(day.weekday() + 1) % 7] += 1         # Python Mon=0..Sun=6 -> Postgres Sun=0..Sat=6
+        day += timedelta(days=1)
+    series = []
+    for d in range(7):
+        k = counts[d]
+        avg = [round(v / k, 1) if k else 0 for v in sums[d]]
+        series.append({"dow": d, "boardings": avg, "days_counted": k})
     return JSONResponse({
-        "hours": BY_HOUR_HOURS, "days": days,
+        "hours": BY_HOUR_HOURS, "days": days, "aggregate": "average",
         "from": start.isoformat(), "to": end.isoformat(),
-        "series": [{"dow": d, "boardings": series[d]} for d in range(7)],
+        "series": series,
     })
 
 
