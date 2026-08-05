@@ -732,18 +732,37 @@ def api_report_summary():
 
 
 @app.get("/api/reports/by-stop")
-def api_report_by_stop(hours: float = 24, scope: str | None = None, limit: int = 100):
-    """Per-stop boardings/alightings split by direction plus a combined total. Either
-    a rolling window (`hours`) or the current service day (`scope=service_day`)."""
+def api_report_by_stop(hours: float = 24, scope: str | None = None, days: int | None = None,
+                       frm: str | None = None, to: str | None = None, limit: int = 100):
+    """Per-stop boardings/alightings split by direction plus a combined total. Window is
+    one of: an explicit service-day range (`frm`/`to`), the last `days` service days
+    (ending at the current one), the current service day (`scope=service_day`), or a
+    rolling `hours` window (the 4h view). Range modes echo `from`/`to` so the page's
+    date picker can stay in sync."""
     now = datetime.now(core.AGENCY_TZ)
-    if scope == "service_day":
-        since = service_day_start(now)
-        until = since + timedelta(days=1)
-        meta = {"scope": "service_day", "service_day": since.date().isoformat()}
-    else:
-        since = now - timedelta(hours=hours)
-        until = now + timedelta(days=1)              # effectively open (no future buckets)
-        meta = {"scope": "rolling", "hours": hours}
+    cur = service_day_start(now).date()
+    try:
+        if frm or to:                                    # explicit picker range
+            start_d = date.fromisoformat(frm) if frm else cur
+            end_d = date.fromisoformat(to) if to else cur
+            since = _service_day_start_for(start_d)
+            until = _service_day_start_for(end_d) + timedelta(days=1)
+            meta = {"scope": "range", "from": start_d.isoformat(), "to": end_d.isoformat()}
+        elif days is not None:                           # last N service days, ending today
+            start_d = cur - timedelta(days=days - 1)
+            since = _service_day_start_for(start_d)
+            until = _service_day_start_for(cur) + timedelta(days=1)
+            meta = {"scope": "range", "from": start_d.isoformat(), "to": cur.isoformat(), "days": days}
+        elif scope == "service_day":                     # current service day (busiest card)
+            since = service_day_start(now)
+            until = since + timedelta(days=1)
+            meta = {"scope": "service_day", "service_day": since.date().isoformat()}
+        else:                                            # rolling window (the 4h view)
+            since = now - timedelta(hours=hours)
+            until = now + timedelta(days=1)              # effectively open (no future buckets)
+            meta = {"scope": "rolling", "hours": hours}
+    except ValueError:
+        return JSONResponse({"error": "bad date (use YYYY-MM-DD)"}, status_code=400)
     rows = db.fetchall(
         "SELECT stop_name, "
         "  COALESCE(SUM(ons)  FILTER (WHERE direction='Northbound'),0), "

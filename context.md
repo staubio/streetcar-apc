@@ -202,8 +202,13 @@ Priority order:
 
 ### Report endpoints
 - `/api/reports/summary` — current service day's boardings/alightings.
-- `/api/reports/by-stop?hours=|scope=service_day` — per-stop NB/SB split + combined
-  total, sorted by activity, excludes `(unmatched)`. "Day" toggle sends `scope=service_day`.
+- `/api/reports/by-stop?hours=|scope=service_day|days=|frm=|to=` — per-stop NB/SB
+  split + combined total, sorted by activity, excludes `(unmatched)`. Windows: a rolling
+  `hours` (the 4h view), the current service day (`scope=service_day`, used by the
+  busiest-stop card), the last `days` service days ending today (the Day/Week/Month/Year
+  buttons), or an explicit service-day range (`frm`/`to`, from the table's date picker).
+  Range modes echo `from`/`to` so the picker stays in sync; the day-based buttons end at
+  the current service day (live "today"), unlike the by-hour presets.
 - `/api/reports/daily?days=|frm=|to=` — per-service-day totals for the trend.
 - `/api/reports/by-hour?days=|frm=|to=` — boardings by clock-hour, one series per
   day-of-week, over the selected service days (`days` a multiple of 7). Each (weekday,
